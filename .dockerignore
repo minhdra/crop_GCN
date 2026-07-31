@@ -1,0 +1,14 @@
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+.git
+.pytest_cache
+input_pdf
+output_pdf
+output_scans
+static
+tests
+debug_contours.jpg
+debug_edges.jpg
+.DS_Store

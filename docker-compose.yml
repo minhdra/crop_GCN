@@ -1,0 +1,18 @@
+services:
+  scanner-api:
+    build: .
+    ports:
+      # Chỉ bind vào localhost để tránh lộ API (không có auth) ra cả mạng LAN.
+      # Nếu thực sự cần truy cập từ máy khác, đổi thành "8000:8000" và tự thêm auth/reverse proxy.
+      - "127.0.0.1:8000:8000"
+    environment:
+      - SCAN_OUTPUT_DIR=/app/output_scans
+    volumes:
+      - ./output_scans:/app/output_scans
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
