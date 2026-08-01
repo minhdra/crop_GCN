@@ -324,7 +324,7 @@ async def health() -> dict[str, str]:
 @app.post("/api/scan", response_model=ScanResult)
 def scan_single_file(
     file: Annotated[UploadFile, File(description="File PDF hoặc ảnh cần xử lý")],
-    mode: ModeParam = "scan",
+    mode: ModeParam = "color",
     rotate: RotateParam = 0,
     sharpness: SharpnessParam = 0.7,
     min_area_ratio: MinAreaRatioParam = 0.2,
