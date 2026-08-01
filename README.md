@@ -149,6 +149,23 @@ Có thể đổi thư mục lưu kết quả trên host qua biến môi trườn
 `docker-compose.yml` (`SCAN_OUTPUT_DIR`, mặc định `/app/output_scans` bên
 trong container, mount từ `./output_scans` trên host).
 
+## Cấu hình qua biến môi trường
+
+Toàn bộ biến môi trường (dọn dẹp tự động, giới hạn tải...) được liệt kê kèm
+mô tả đầy đủ trong [`.env.example`](.env.example). Trước khi chạy local
+hoặc qua Docker, copy file này thành `.env` rồi chỉnh nếu cần:
+
+```bash
+cp .env.example .env
+```
+
+`.env` được `docker compose` tự nạp vào container (`env_file` trong
+`docker-compose.yml`), và app cũng tự đọc khi chạy trực tiếp qua
+`uvicorn`/`scan-api` (nhờ `python-dotenv`) - không cần export tay. Biến đã
+export sẵn trong shell hoặc đặt trong `docker-compose.yml` luôn được ưu
+tiên hơn giá trị trong `.env`. File `.env` không chứa thông tin nhạy cảm
+(API hiện không có auth) và đã được thêm vào `.gitignore`.
+
 ## Performance / khả năng chịu tải
 
 API xử lý ảnh/PDF bằng OpenCV + PyMuPDF, tốn CPU đáng kể mỗi request. Ba
@@ -172,6 +189,10 @@ app chụp ảnh gọi vào):
      server ≈ `WEB_CONCURRENCY` × `SCAN_MAX_CONCURRENT_JOBS`.
    - `SCAN_MAX_UPLOAD_MB` (mặc định `50`): kích thước file upload tối đa
      mỗi file, chặn sớm trước khi tốn CPU xử lý file quá khổ.
+4. **Dọn dẹp tự động** file tạm và bản lưu lâu dài, tránh phình đĩa vô hạn
+   theo thời gian server chạy — `SCAN_STORAGE_TTL_HOURS` (mặc định `24`),
+   `SCAN_OUTPUT_TTL_DAYS` (mặc định `30`), `SCAN_CLEANUP_INTERVAL_MINUTES`
+   (mặc định `60`). Chi tiết xem [`.env.example`](.env.example).
 
 ### Giới hạn hiện tại / khi nào cần queue
 

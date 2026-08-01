@@ -8,17 +8,21 @@ Sau đó xem tài liệu API tại http://127.0.0.1:8000/docs
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
 import re
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, AsyncIterator, Literal, List
 
 import anyio.to_thread
+from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
@@ -30,6 +34,12 @@ from py_project.document_scanner import (
     scan_pdf,
 )
 from py_project.schemas import BatchScanResult, ScanResult
+
+# Nạp file .env ở thư mục làm việc hiện tại (nếu có) - chỉ điền các biến
+# CHƯA được set sẵn trong môi trường, không ghi đè biến đã export/đã đặt
+# qua Docker (xem docker-compose.yml). Cho phép chạy `uvicorn`/`scan-api`
+# cục bộ cũng đọc được cấu hình từ .env giống như khi chạy qua Docker.
+load_dotenv()
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".heic"}
 
@@ -61,15 +71,65 @@ _JOB_SEMAPHORE = threading.Semaphore(MAX_CONCURRENT_JOBS)
 MAX_UPLOAD_BYTES = int(os.environ.get("SCAN_MAX_UPLOAD_MB", "50")) * 1024 * 1024
 _UPLOAD_COPY_CHUNK_SIZE = 1024 * 1024
 
+# STORAGE_DIR và OUTPUT_DIR trước đây không có cơ chế dọn dẹp nào - mỗi lần
+# gọi API thành công đều lưu vĩnh viễn, khiến cả hai phình to vô hạn theo
+# thời gian chạy server. STORAGE_DIR chỉ cần giữ đủ lâu để người dùng tải/
+# xem lại qua /api/download, /api/view, /api/debug ngay sau khi xử lý;
+# OUTPUT_DIR (đối soát lâu dài) giữ lâu hơn. Cả hai đều chỉnh được qua biến
+# môi trường nếu nhu cầu đối soát cần giữ lâu hơn/ngắn hơn mặc định.
+STORAGE_TTL_SECONDS = int(os.environ.get("SCAN_STORAGE_TTL_HOURS", "24")) * 3600
+OUTPUT_TTL_SECONDS = int(os.environ.get("SCAN_OUTPUT_TTL_DAYS", "30")) * 86400
+CLEANUP_INTERVAL_SECONDS = int(os.environ.get("SCAN_CLEANUP_INTERVAL_MINUTES", "60")) * 60
+
+
+def _cleanup_expired_files() -> None:
+    """Xóa job tạm (STORAGE_DIR) quá SCAN_STORAGE_TTL_HOURS và bản lưu lâu
+    dài (OUTPUT_DIR) quá SCAN_OUTPUT_TTL_DAYS. Dựa trên thời gian sửa đổi
+    (mtime) - job dir/file chỉ được ghi một lần lúc xử lý nên mtime phản
+    ánh đúng thời điểm hoàn tất."""
+    now = time.time()
+
+    for job_dir in STORAGE_DIR.iterdir():
+        try:
+            if job_dir.is_dir() and now - job_dir.stat().st_mtime > STORAGE_TTL_SECONDS:
+                shutil.rmtree(job_dir, ignore_errors=True)
+        except OSError:
+            continue
+
+    for output_file in OUTPUT_DIR.iterdir():
+        try:
+            if output_file.is_file() and now - output_file.stat().st_mtime > OUTPUT_TTL_SECONDS:
+                output_file.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+async def _periodic_cleanup_loop() -> None:
+    """Chạy _cleanup_expired_files định kỳ suốt vòng đời server (không chỉ
+    lúc khởi động), để dọn rác ngay cả khi server chạy liên tục lâu ngày
+    không restart."""
+    while True:
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+        await anyio.to_thread.run_sync(_cleanup_expired_files)
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Khớp số luồng threadpool (nơi FastAPI chạy các route `def` đồng bộ)
     với MAX_CONCURRENT_JOBS, để không tạo dư luồng chờ so với mức xử lý
-    thực tế cho phép (xem _JOB_SEMAPHORE)."""
+    thực tế cho phép (xem _JOB_SEMAPHORE). Đồng thời dọn file/job hết hạn
+    ngay khi khởi động và định kỳ trong lúc chạy."""
     anyio.to_thread.current_default_thread_limiter().total_tokens = max(
         MAX_CONCURRENT_JOBS, 4
     )
-    yield
+    _cleanup_expired_files()
+    cleanup_task = asyncio.create_task(_periodic_cleanup_loop())
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await cleanup_task
 
 
 app = FastAPI(

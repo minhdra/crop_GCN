@@ -5,18 +5,16 @@ services:
       # Chỉ bind vào localhost để tránh lộ API (không có auth) ra cả mạng LAN.
       # Nếu thực sự cần truy cập từ máy khác, đổi thành "8000:8000" và tự thêm auth/reverse proxy.
       - "127.0.0.1:8000:8000"
+    # Nạp toàn bộ biến tinh chỉnh (TTL dọn dẹp, giới hạn tải...) từ .env -
+    # xem mô tả đầy đủ từng biến trong .env.example. Copy .env.example
+    # thành .env trước khi chạy `docker compose up` nếu chưa có.
+    env_file:
+      - .env
     environment:
+      # Ghi đè đường dẫn cho khớp bên trong container (WORKDIR /app) -
+      # khác với mặc định khi chạy local, nên đặt riêng ở đây thay vì
+      # trong .env dùng chung cho cả hai môi trường.
       - SCAN_OUTPUT_DIR=/app/output_scans
-      # Số uvicorn worker process. Nên đặt bằng số CPU core cấp cho container
-      # (workload OpenCV/PyMuPDF là CPU-bound, multi-process mới tận dụng
-      # được nhiều core do giới hạn GIL).
-      - WEB_CONCURRENCY=2
-      # Số job xử lý đồng thời tối đa TRÊN MỖI worker process; vượt quá sẽ
-      # bị từ chối ngay bằng HTTP 503 thay vì xếp hàng vô hạn định. Tổng số
-      # job đồng thời thực tế = WEB_CONCURRENCY * SCAN_MAX_CONCURRENT_JOBS.
-      - SCAN_MAX_CONCURRENT_JOBS=4
-      # Kích thước file upload tối đa (MB) cho mỗi file.
-      - SCAN_MAX_UPLOAD_MB=50
     volumes:
       - ./output_scans:/app/output_scans
     restart: unless-stopped
