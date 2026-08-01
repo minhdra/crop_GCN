@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 
 import pytest
@@ -144,6 +145,42 @@ def test_scan_image_quality_thresholds_are_tunable() -> None:
     body = response.json()
     assert body["status"] == "warning"
     assert body["is_blurry"] is True
+
+
+def test_scan_upload_over_size_limit_reports_error_without_failing_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Giới hạn kích thước cực nhỏ để buộc file test (dù nội dung không phải
+    # ảnh hợp lệ) vượt ngưỡng ngay trong lúc copy, trước khi chạm tới bước
+    # decode ảnh.
+    monkeypatch.setattr(api_module, "MAX_UPLOAD_BYTES", 10)
+
+    response = client.post(
+        "/api/scan",
+        files={"file": ("big.jpg", b"x" * 100, "image/jpeg")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "error"
+    assert "kích thước" in body["message"].lower()
+    assert body["download_url"] is None
+
+
+def test_scan_returns_503_when_concurrency_limit_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Semaphore đã cạn (0 slot) mô phỏng server đang xử lý hết công suất
+    # cho phép; request mới phải bị từ chối ngay bằng 503, không xếp hàng.
+    monkeypatch.setattr(api_module, "_JOB_SEMAPHORE", threading.Semaphore(0))
+
+    response = client.post(
+        "/api/scan",
+        files={"file": ("1.jpeg", b"irrelevant", "image/jpeg")},
+    )
+
+    assert response.status_code == 503
+    assert "Retry-After" in response.headers
 
 
 def test_download_missing_job_returns_404() -> None:

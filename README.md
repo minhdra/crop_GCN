@@ -149,6 +149,45 @@ Có thể đổi thư mục lưu kết quả trên host qua biến môi trườn
 `docker-compose.yml` (`SCAN_OUTPUT_DIR`, mặc định `/app/output_scans` bên
 trong container, mount từ `./output_scans` trên host).
 
+## Performance / khả năng chịu tải
+
+API xử lý ảnh/PDF bằng OpenCV + PyMuPDF, tốn CPU đáng kể mỗi request. Ba
+điều chỉnh sau giúp server chịu tải tốt hơn khi lượng request lớn (ví dụ từ
+app chụp ảnh gọi vào):
+
+1. **Route xử lý khai báo `def` (không phải `async def`)** — vì code xử lý
+   ảnh hoàn toàn đồng bộ, không hỗ trợ `await`. Với `async def`, một request
+   đang xử lý sẽ chiếm toàn bộ event loop, khiến mọi request khác (kể cả
+   `/health`) phải chờ. Với `def`, FastAPI tự chạy trong threadpool riêng,
+   không chặn các request khác.
+2. **Nhiều uvicorn worker process** qua biến môi trường `WEB_CONCURRENCY`
+   (mặc định `2`) — cho phép tận dụng nhiều CPU core thật sự (multi-process,
+   không bị giới hạn bởi GIL như multi-thread). Nên đặt bằng số CPU core cấp
+   cho container.
+3. **Giới hạn tải (backpressure)** qua hai biến môi trường:
+   - `SCAN_MAX_CONCURRENT_JOBS` (mặc định `4`): số job xử lý đồng thời tối
+     đa **trên mỗi worker process**. Vượt quá, request mới bị từ chối ngay
+     bằng `503` (kèm header `Retry-After`) thay vì xếp hàng vô hạn định và
+     làm chậm dần mọi request. Tổng số job đồng thời thực tế trên toàn
+     server ≈ `WEB_CONCURRENCY` × `SCAN_MAX_CONCURRENT_JOBS`.
+   - `SCAN_MAX_UPLOAD_MB` (mặc định `50`): kích thước file upload tối đa
+     mỗi file, chặn sớm trước khi tốn CPU xử lý file quá khổ.
+
+### Giới hạn hiện tại / khi nào cần queue
+
+Cách trên vẫn là kiến trúc **request–response đồng bộ, single-host**: client
+gọi `/api/scan` và chờ kết quả trả về ngay trong 1 request; `STORAGE_DIR`/
+`OUTPUT_DIR` dùng filesystem cục bộ của container. Việc này phù hợp khi app
+gọi vào vẫn chấp nhận chờ đồng bộ.
+
+Nếu sau này cần **scale ngang nhiều container/host**, hoặc traffic vượt quá
+khả năng của multi-worker + backpressure (client bị timeout dù đã tăng
+`WEB_CONCURRENCY`/`SCAN_MAX_CONCURRENT_JOBS` hợp lý), nên cân nhắc chuyển
+sang mô hình hàng đợi (queue): API trả về `job_id` ngay (202), worker riêng
+xử lý nền, client poll trạng thái — khi đó cần thêm hạ tầng (Redis/DB cho
+job queue + trạng thái) và đổi cách gọi API sang polling, đồng thời chuyển
+storage sang nơi dùng chung (S3/MinIO...) thay vì đĩa cục bộ.
+
 ## CLI
 
 ```bash

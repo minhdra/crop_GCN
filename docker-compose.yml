@@ -7,9 +7,27 @@ services:
       - "127.0.0.1:8000:8000"
     environment:
       - SCAN_OUTPUT_DIR=/app/output_scans
+      # Số uvicorn worker process. Nên đặt bằng số CPU core cấp cho container
+      # (workload OpenCV/PyMuPDF là CPU-bound, multi-process mới tận dụng
+      # được nhiều core do giới hạn GIL).
+      - WEB_CONCURRENCY=2
+      # Số job xử lý đồng thời tối đa TRÊN MỖI worker process; vượt quá sẽ
+      # bị từ chối ngay bằng HTTP 503 thay vì xếp hàng vô hạn định. Tổng số
+      # job đồng thời thực tế = WEB_CONCURRENCY * SCAN_MAX_CONCURRENT_JOBS.
+      - SCAN_MAX_CONCURRENT_JOBS=4
+      # Kích thước file upload tối đa (MB) cho mỗi file.
+      - SCAN_MAX_UPLOAD_MB=50
     volumes:
       - ./output_scans:/app/output_scans
     restart: unless-stopped
+    # Giới hạn tài nguyên khởi điểm - CẦN chỉnh lại theo cấu hình máy chủ
+    # thật (số core/RAM khả dụng) trước khi dùng production. Compose CLI
+    # (docker compose, không cần Swarm) áp dụng deploy.resources.limits.
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2g
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 30s

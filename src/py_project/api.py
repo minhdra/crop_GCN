@@ -12,10 +12,13 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Literal, List
+from typing import Annotated, AsyncIterator, Literal, List
 
+import anyio.to_thread
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
@@ -46,10 +49,34 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 
+# Số job xử lý (scan_image/scan_pdf) chạy đồng thời tối đa trên MỖI process.
+# Vượt quá số này, request mới bị từ chối ngay (503) thay vì xếp hàng vô hạn
+# định. Với nhiều worker process (xem WEB_CONCURRENCY), tổng số job đồng thời
+# thực tế = WEB_CONCURRENCY * SCAN_MAX_CONCURRENT_JOBS.
+MAX_CONCURRENT_JOBS = int(os.environ.get("SCAN_MAX_CONCURRENT_JOBS", "4"))
+_JOB_SEMAPHORE = threading.Semaphore(MAX_CONCURRENT_JOBS)
+
+# Kích thước file upload tối đa (MB) cho mỗi file, chặn sớm trước khi tốn
+# CPU xử lý ảnh/PDF quá khổ.
+MAX_UPLOAD_BYTES = int(os.environ.get("SCAN_MAX_UPLOAD_MB", "50")) * 1024 * 1024
+_UPLOAD_COPY_CHUNK_SIZE = 1024 * 1024
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Khớp số luồng threadpool (nơi FastAPI chạy các route `def` đồng bộ)
+    với MAX_CONCURRENT_JOBS, để không tạo dư luồng chờ so với mức xử lý
+    thực tế cho phép (xem _JOB_SEMAPHORE)."""
+    anyio.to_thread.current_default_thread_limiter().total_tokens = max(
+        MAX_CONCURRENT_JOBS, 4
+    )
+    yield
+
+
 app = FastAPI(
     title="Document Scanner API",
     description="Crop và làm rõ PDF / ảnh theo kiểu scanner.",
     version="1.0.0",
+    lifespan=_lifespan,
 )
 
 VALID_ROTATIONS = (0, 90, 180, 270)
@@ -149,6 +176,23 @@ def _persist_output_copy(job_id: str, original_name: str, output_path: Path) -> 
     return persisted_path
 
 
+def _copy_upload_with_size_limit(upload: UploadFile, destination: Path) -> None:
+    """Sao chép file upload vào đĩa theo chunk, chặn sớm nếu vượt MAX_UPLOAD_BYTES."""
+    total_bytes = 0
+    with destination.open("wb") as buffer:
+        while True:
+            chunk = upload.file.read(_UPLOAD_COPY_CHUNK_SIZE)
+            if not chunk:
+                break
+            total_bytes += len(chunk)
+            if total_bytes > MAX_UPLOAD_BYTES:
+                raise ValueError(
+                    f"File vượt quá kích thước tối đa cho phép "
+                    f"({MAX_UPLOAD_BYTES // (1024 * 1024)} MB)."
+                )
+            buffer.write(chunk)
+
+
 def _process_one(
     upload: UploadFile,
     mode: str,
@@ -178,9 +222,19 @@ def _process_one(
     job_dir.mkdir(parents=True, exist_ok=True)
     input_path = job_dir / f"input{suffix}"
 
+    # Giới hạn số job xử lý đồng thời trên process này; nếu đang quá tải thì
+    # từ chối ngay (503) thay vì để request xếp hàng vô hạn định.
+    if not _JOB_SEMAPHORE.acquire(blocking=False):
+        shutil.rmtree(job_dir, ignore_errors=True)
+        upload.file.close()
+        raise HTTPException(
+            status_code=503,
+            detail="Server đang xử lý quá nhiều yêu cầu, vui lòng thử lại sau.",
+            headers={"Retry-After": "2"},
+        )
+
     try:
-        with input_path.open("wb") as buffer:
-            shutil.copyfileobj(upload.file, buffer)
+        _copy_upload_with_size_limit(upload, input_path)
 
         if suffix == ".pdf":
             output_path = job_dir / "output.pdf"
@@ -258,6 +312,7 @@ def _process_one(
             message=message,
         )
     finally:
+        _JOB_SEMAPHORE.release()
         upload.file.close()
 
 
@@ -267,7 +322,7 @@ async def health() -> dict[str, str]:
 
 
 @app.post("/api/scan", response_model=ScanResult)
-async def scan_single_file(
+def scan_single_file(
     file: Annotated[UploadFile, File(description="File PDF hoặc ảnh cần xử lý")],
     mode: ModeParam = "scan",
     rotate: RotateParam = 0,
@@ -291,7 +346,12 @@ async def scan_single_file(
         ),
     ] = False,
 ) -> ScanResult:
-    """Xử lý một file (PDF hoặc ảnh) và trả về trạng thái cùng đường dẫn tải kết quả."""
+    """Xử lý một file (PDF hoặc ảnh) và trả về trạng thái cùng đường dẫn tải kết quả.
+
+    Hàm này khai báo `def` (không phải `async def`) vì `_process_one` gọi
+    OpenCV/PyMuPDF đồng bộ, không hỗ trợ await; FastAPI tự chạy các route
+    `def` trong threadpool riêng nên không chiếm event loop chính.
+    """
     _validate_rotate(rotate)
     return _process_one(
         upload=file,
@@ -309,7 +369,7 @@ async def scan_single_file(
 
 
 @app.post("/api/scan/batch", response_model=BatchScanResult)
-async def scan_multiple_files(
+def scan_multiple_files(
     # QUAN TRỌNG: Dùng List từ typing, không dùng list thường
     files: List[UploadFile] = File(description="Danh sách file PDF/ảnh cần xử lý"),
     mode: ModeParam = "scan",
@@ -375,7 +435,7 @@ def _resolve_job_output_file(job_id: str) -> Path:
 
 
 @app.get("/api/download/{job_id}")
-async def download_result(job_id: str) -> FileResponse:
+def download_result(job_id: str) -> FileResponse:
     """Tải file kết quả (buộc trình duyệt lưu về máy) theo job_id trả về từ /api/scan."""
     output_path = _resolve_job_output_file(job_id)
     return FileResponse(
@@ -386,7 +446,7 @@ async def download_result(job_id: str) -> FileResponse:
 
 
 @app.get("/api/view/{job_id}")
-async def view_result(job_id: str) -> FileResponse:
+def view_result(job_id: str) -> FileResponse:
     """Xem trực tiếp file kết quả (ảnh/PDF hiển thị inline trên trình duyệt), dùng làm link ảnh để đối soát nhanh."""
     output_path = _resolve_job_output_file(job_id)
     return FileResponse(
@@ -397,7 +457,7 @@ async def view_result(job_id: str) -> FileResponse:
 
 
 @app.get("/api/debug/{job_id}")
-async def view_debug_image(job_id: str, page: int = 1) -> FileResponse:
+def view_debug_image(job_id: str, page: int = 1) -> FileResponse:
     """Xem ảnh debug (contour vùng giấy + góc crop + blur_score/solidity) để
     soi vì sao crop/chất lượng ra kết quả như vậy. Chỉ có nếu gọi /api/scan
     hoặc /api/scan/batch với debug=true. Với PDF nhiều trang, dùng ?page=N
