@@ -54,14 +54,63 @@ app = FastAPI(
 
 VALID_ROTATIONS = (0, 90, 180, 270)
 
-ModeParam = Annotated[Literal["color", "scan", "bw"], Form()]
-RotateParam = Annotated[int, Form()]
-SharpnessParam = Annotated[float, Form(ge=0, le=3)]
-MinAreaRatioParam = Annotated[float, Form(gt=0, lt=1)]
-DpiParam = Annotated[int, Form(ge=72, le=600)]
-JpegQualityParam = Annotated[int, Form(ge=1, le=100)]
-BlurThresholdParam = Annotated[float, Form(ge=0)]
-SolidityThresholdParam = Annotated[float, Form(gt=0, le=1)]
+ModeParam = Annotated[
+    Literal["color", "scan", "bw"],
+    Form(
+        description=(
+            "Chế độ xử lý màu ảnh đầu ra: 'color' giữ nguyên màu, "
+            "'scan' tăng tương phản kiểu máy scan, 'bw' chuyển đen trắng."
+        )
+    ),
+]
+RotateParam = Annotated[
+    int,
+    Form(description="Góc xoay ảnh/trang theo chiều kim đồng hồ, tính bằng độ. Chỉ nhận 0, 90, 180 hoặc 270."),
+]
+SharpnessParam = Annotated[
+    float,
+    Form(ge=0, le=3, description="Độ làm nét ảnh (unsharp mask). 0 = không làm nét, giá trị càng cao càng nét."),
+]
+MinAreaRatioParam = Annotated[
+    float,
+    Form(
+        gt=0,
+        lt=1,
+        description=(
+            "Tỷ lệ diện tích tối thiểu (0-1) của vùng giấy so với toàn bộ ảnh "
+            "để được nhận diện là tài liệu cần crop."
+        ),
+    ),
+]
+DpiParam = Annotated[
+    int,
+    Form(ge=72, le=600, description="Độ phân giải (DPI) khi render trang PDF thành ảnh trước khi xử lý. Chỉ áp dụng cho file PDF."),
+]
+JpegQualityParam = Annotated[
+    int,
+    Form(ge=1, le=100, description="Chất lượng nén JPEG của ảnh/trang đầu ra (1-100), giá trị càng cao ảnh càng nét nhưng dung lượng càng lớn."),
+]
+BlurThresholdParam = Annotated[
+    float,
+    Form(
+        ge=0,
+        description=(
+            "Ngưỡng điểm độ nét (Laplacian variance) để coi ảnh là bị mờ; "
+            "điểm thấp hơn ngưỡng này sẽ bị đánh dấu is_blurry."
+        ),
+    ),
+]
+SolidityThresholdParam = Annotated[
+    float,
+    Form(
+        gt=0,
+        le=1,
+        description=(
+            "Ngưỡng độ đặc (solidity) của viền giấy để nghi ngờ tài liệu bị nát/rách; "
+            "solidity thấp hơn ngưỡng này sẽ bị đánh dấu is_damaged."
+        ),
+    ),
+]
 
 
 def _validate_rotate(rotate: int) -> None:
@@ -224,12 +273,23 @@ async def scan_single_file(
     rotate: RotateParam = 0,
     sharpness: SharpnessParam = 0.7,
     min_area_ratio: MinAreaRatioParam = 0.2,
-    crop: Annotated[bool, Form()] = True,
+    crop: Annotated[
+        bool,
+        Form(description="Có tự động phát hiện và crop viền giấy hay không. False = giữ nguyên khung ảnh gốc."),
+    ] = True,
     dpi: DpiParam = 200,
     jpeg_quality: JpegQualityParam = 92,
     blur_threshold: BlurThresholdParam = DEFAULT_BLUR_THRESHOLD,
     solidity_threshold: SolidityThresholdParam = DEFAULT_SOLIDITY_THRESHOLD,
-    debug: Annotated[bool, Form()] = False,
+    debug: Annotated[
+        bool,
+        Form(
+            description=(
+                "Nếu True, sinh thêm ảnh debug (contour vùng giấy, góc crop, blur_score/solidity) "
+                "để xem qua /api/debug/{job_id}."
+            )
+        ),
+    ] = False,
 ) -> ScanResult:
     """Xử lý một file (PDF hoặc ảnh) và trả về trạng thái cùng đường dẫn tải kết quả."""
     _validate_rotate(rotate)
@@ -256,12 +316,23 @@ async def scan_multiple_files(
     rotate: RotateParam = 0,
     sharpness: SharpnessParam = 0.7,
     min_area_ratio: MinAreaRatioParam = 0.2,
-    crop: Annotated[bool, Form()] = True,
+    crop: Annotated[
+        bool,
+        Form(description="Có tự động phát hiện và crop viền giấy hay không. False = giữ nguyên khung ảnh gốc."),
+    ] = True,
     dpi: DpiParam = 200,
     jpeg_quality: JpegQualityParam = 92,
     blur_threshold: BlurThresholdParam = DEFAULT_BLUR_THRESHOLD,
     solidity_threshold: SolidityThresholdParam = DEFAULT_SOLIDITY_THRESHOLD,
-    debug: Annotated[bool, Form()] = False,
+    debug: Annotated[
+        bool,
+        Form(
+            description=(
+                "Nếu True, sinh thêm ảnh debug (contour vùng giấy, góc crop, blur_score/solidity) "
+                "để xem qua /api/debug/{job_id}."
+            )
+        ),
+    ] = False,
 ) -> BatchScanResult:
     """Xử lý một danh sách file, mỗi file trả về trạng thái riêng."""
     _validate_rotate(rotate)
