@@ -100,18 +100,25 @@ def process_pdf_page(
     cropped = False
     corners = None
 
+    # Tính một lần, dùng lại cho assess_quality/find_document_corners/
+    # generate_debug_image - bước này giờ chạy cả GrabCut nên khá tốn
+    # (hàng trăm ms), gọi lặp lại 2-3 lần cho cùng một ảnh sẽ rất lãng phí.
+    prepared = _paper_contours(original_image, min_area_ratio)
+
     # Đánh giá chất lượng trên ảnh gốc, trước khi crop làm mất tín hiệu viền rách.
     quality = assess_quality(
         image=original_image,
         min_area_ratio=min_area_ratio,
         blur_threshold=blur_threshold,
         solidity_threshold=solidity_threshold,
+        prepared=prepared,
     )
 
     if crop:
         corners = find_document_corners(
             image=original_image,
             min_area_ratio=min_area_ratio,
+            prepared=prepared,
         )
 
         if corners is not None:
@@ -119,7 +126,7 @@ def process_pdf_page(
             cropped = True
 
     debug_image = (
-        generate_debug_image(original_image, min_area_ratio, corners, quality)
+        generate_debug_image(original_image, min_area_ratio, corners, quality, prepared=prepared)
         if debug
         else None
     )
@@ -362,34 +369,65 @@ def _paper_contours(
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
 
-    # 4. Tìm contour của vùng sáng (tờ giấy)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # 4. Tìm contour của vùng sáng (tờ giấy) qua threshold
+    contours_thresh, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    if not contours:
-        return None
+    # 5. Bổ sung contour theo biên cạnh (Canny). Threshold một ngưỡng dễ thất
+    # bại khi ánh sáng không đều / có bóng đổ / nền gần cùng độ sáng với
+    # giấy (ảnh chụp điện thoại thực tế); biên cạnh bám theo độ tương phản
+    # cục bộ nên bền hơn trong các trường hợp đó.
+    #
+    # Không có một ngưỡng Canny duy nhất phù hợp mọi ảnh: nền có vân/kết cấu
+    # (mặt bàn gỗ, vải...) cần ngưỡng cao để không bắt nhiễu vân nền (vân gỗ
+    # dày đặc dễ nối liền viền tài liệu với nền thành một khối duy nhất khi
+    # ngưỡng thấp); còn ảnh thiếu sáng/độ tương phản thấp cần tăng tương
+    # phản cục bộ (CLAHE) và ngưỡng thấp mới bắt được viền yếu. Nên thử
+    # nhiều tổ hợp và để bước lọc phía sau (diện tích, chạm cạnh) loại bỏ
+    # ứng viên sai thay vì đoán một ngưỡng "đúng" duy nhất.
+    blurred_gray = cv2.GaussianBlur(cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY), (5, 5), 0)
+    contrast_boosted = cv2.GaussianBlur(
+        cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(
+            cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+        ),
+        (5, 5),
+        0,
+    )
+    median_intensity = float(np.median(contrast_boosted))
+    canny_attempts = [
+        (blurred_gray, 75, 175),
+        (blurred_gray, 120, 240),
+        (blurred_gray, 150, 255),
+        (
+            contrast_boosted,
+            int(max(0, 0.67 * median_intensity)),
+            int(min(255, 1.33 * median_intensity)),
+        ),
+    ]
 
-    # Sắp xếp theo diện tích giảm dần
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)
-    minimum_area = resized.shape[0] * resized.shape[1] * min_area_ratio
-    margin = 5
-    valid_contours = []
+    # Kernel giãn nở lớn để nối liền các đoạn biên bị đứt quãng (do nhiễu
+    # JPEG, vân nền, hoặc vùng lóa sáng) thành một đường viền khép kín duy
+    # nhất - nếu không, findContours sẽ trả về nhiều mảnh biên rời rạc, nhỏ
+    # hơn nhiều so với diện tích tài liệu thật.
+    edge_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (21, 21))
+    contours_edges: list[np.ndarray] = []
+    for source, lower_bound, upper_bound in canny_attempts:
+        edges = cv2.dilate(cv2.Canny(source, lower_bound, upper_bound), edge_kernel)
+        found, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours_edges.extend(found)
 
-    for contour in contours:
-        if cv2.contourArea(contour) < minimum_area:
-            continue
+    # 6. Luôn bổ sung ứng viên từ GrabCut. Threshold/Canny đều dựa trên so
+    # sánh độ sáng - thất bại (hoặc chỉ bắt được một phần) khi tài liệu
+    # nhiều màu (bìa màu + trang trắng của một cuốn sổ/giấy chứng nhận, loại
+    # tài liệu chính ở đây) hoặc nền có màu/kết cấu na ná tài liệu. GrabCut
+    # tự học phân phối màu foreground/background thay vì dùng một ngưỡng cố
+    # định nên bắt được toàn bộ bìa+trang thay vì chỉ phần dễ nhận nhất; đổi
+    # lại chậm hơn nhiều lần (hàng trăm ms) nhưng vì đây là loại tài liệu
+    # chính nên chấp nhận chạy mỗi lần thay vì đoán khi nào cần.
+    grabcut_contours = _grabcut_contours(resized)
 
-        # Loại bỏ contour chạm cả 4 cạnh (toàn bộ ảnh)
-        x, y, w, h = cv2.boundingRect(contour)
-        touches_all_borders = (
-            x <= margin and
-            y <= margin and
-            x + w >= resized.shape[1] - 1 - margin and
-            y + h >= resized.shape[0] - 1 - margin
-        )
-        if touches_all_borders:
-            continue
+    contours = list(contours_thresh) + contours_edges + grabcut_contours
 
-        valid_contours.append(contour)
+    valid_contours = _filter_candidate_contours(contours, resized.shape, min_area_ratio)
 
     if not valid_contours:
         return None
@@ -397,22 +435,132 @@ def _paper_contours(
     return valid_contours, resized, scale
 
 
-def find_document_corners(image: np.ndarray, min_area_ratio: float) -> np.ndarray | None:
-    """Tìm 4 góc tài liệu bằng cách tách vùng sáng (giấy trắng) khỏi nền tối."""
-    prepared = _paper_contours(image, min_area_ratio)
+def _filter_candidate_contours(
+    contours: list[np.ndarray], image_shape: tuple[int, ...], min_area_ratio: float
+) -> list[np.ndarray]:
+    """Lọc và sắp xếp giảm dần theo diện tích các contour đủ lớn và không
+    chạm từ 3 cạnh ảnh trở lên."""
+    if not contours:
+        return []
+
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
+    image_area = image_shape[0] * image_shape[1]
+    minimum_area = image_area * min_area_ratio
+    # Nếu contour lớn gần bằng cả ảnh, gần như chắc chắn đó là nền/toàn khung
+    # hình bị dính vào nhau (thường gặp khi ảnh quá ít tương phản), không
+    # phải tài liệu có viền/lề - thà bỏ qua để giữ nguyên ảnh gốc còn hơn
+    # crop nhầm vào nền.
+    maximum_area = image_area * 0.92
+    margin = 5
+    valid_contours = []
+
+    for contour in contours:
+        contour_area = cv2.contourArea(contour)
+        if contour_area < minimum_area or contour_area > maximum_area:
+            continue
+
+        # Loại bỏ contour chạm từ 3 cạnh ảnh trở lên - tài liệu thật luôn có
+        # lề nhìn thấy được ít nhất ở 2 phía đối diện; chạm gần hết các cạnh
+        # thường là nền/toàn khung hình bị dính vào vùng tách được.
+        x, y, w, h = cv2.boundingRect(contour)
+        touched_borders = sum([
+            x <= margin,
+            y <= margin,
+            x + w >= image_shape[1] - 1 - margin,
+            y + h >= image_shape[0] - 1 - margin,
+        ])
+        if touched_borders >= 3:
+            continue
+
+        valid_contours.append(contour)
+
+    return valid_contours
+
+
+def _grabcut_contours(resized: np.ndarray) -> list[np.ndarray]:
+    """Tách vùng tiền cảnh (tài liệu) khỏi hậu cảnh bằng GrabCut, khởi tạo
+    bằng một khung chữ nhật lùi vào 3% mỗi cạnh (giả định tài liệu nằm gần
+    giữa khung hình, chừa lề ngoài là nền). Chạy trên ảnh thu nhỏ hơn nữa vì
+    GrabCut khá chậm (hàng trăm ms), chỉ nên gọi khi các cách nhanh hơn đã
+    thất bại."""
+    height, width = resized.shape[:2]
+    grabcut_scale = min(1.0, 600 / max(height, width))
+    small = (
+        cv2.resize(resized, None, fx=grabcut_scale, fy=grabcut_scale)
+        if grabcut_scale < 1
+        else resized
+    )
+    small_height, small_width = small.shape[:2]
+    mask = np.zeros((small_height, small_width), np.uint8)
+    rect = (
+        max(1, round(small_width * 0.03)),
+        max(1, round(small_height * 0.03)),
+        round(small_width * 0.94),
+        round(small_height * 0.94),
+    )
+    background_model = np.zeros((1, 65), np.float64)
+    foreground_model = np.zeros((1, 65), np.float64)
+
+    try:
+        cv2.grabCut(
+            small, mask, rect, background_model, foreground_model, 3, cv2.GC_INIT_WITH_RECT
+        )
+    except cv2.error:
+        return []
+
+    foreground = np.where((mask == 2) | (mask == 0), 0, 255).astype(np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+    foreground = cv2.morphologyEx(foreground, cv2.MORPH_CLOSE, kernel)
+    contours, _ = cv2.findContours(foreground, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if grabcut_scale < 1:
+        contours = [(contour / grabcut_scale).astype(np.float32) for contour in contours]
+
+    return list(contours)
+
+
+def _approximate_quad(contour: np.ndarray) -> np.ndarray | None:
+    """Xấp xỉ contour thành đa giác lồi 4 điểm. Thử nhiều mức epsilon từ chặt
+    đến lỏng vì viền giấy thực tế (bo tròn nhẹ, mờ, có bóng) thường không xẹp
+    gọn về đúng 4 góc ngay ở epsilon đầu tiên."""
+    perimeter = cv2.arcLength(contour, True)
+    for epsilon_ratio in (0.01, 0.02, 0.03, 0.04, 0.05, 0.08):
+        approximation = cv2.approxPolyDP(contour, epsilon_ratio * perimeter, True)
+        if len(approximation) == 4 and cv2.isContourConvex(approximation):
+            return approximation.reshape(4, 2).astype(np.float32)
+    return None
+
+
+def find_document_corners(
+    image: np.ndarray,
+    min_area_ratio: float,
+    prepared: tuple[list[np.ndarray], np.ndarray, float] | None = None,
+) -> np.ndarray | None:
+    """Tìm 4 góc tài liệu. Ưu tiên góc từ contour xấp xỉ đúng thành hình tứ
+    giác; nếu viền quá nhiễu/mờ để xấp xỉ gọn, dùng hình chữ nhật xoay nhỏ
+    nhất bao quanh contour lớn nhất tìm được làm phương án dự phòng - vẫn
+    lật thẳng được tài liệu bị nghiêng thay vì bỏ qua không crop, giống cách
+    CamScanner luôn cố đưa ra một khung crop tốt nhất có thể.
+
+    `prepared` cho phép truyền lại kết quả `_paper_contours` đã tính sẵn
+    (từ assess_quality/generate_debug_image trên cùng ảnh) để khỏi tính lại
+    - bước này giờ chạy cả GrabCut nên khá tốn (hàng trăm ms), không nên
+    lặp lại 2-3 lần cho mỗi ảnh/trang."""
+    if prepared is None:
+        prepared = _paper_contours(image, min_area_ratio)
     if prepared is None:
         return None
 
     contours, _, scale = prepared
 
     for contour in contours:
-        perimeter = cv2.arcLength(contour, True)
-        approximation = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
+        quad = _approximate_quad(contour)
+        if quad is not None:
+            return quad / scale
 
-        if len(approximation) == 4 and cv2.isContourConvex(approximation):
-            return approximation.astype(np.float32) / scale
-
-    return None
+    largest_contour = contours[0]
+    box = cv2.boxPoints(cv2.minAreaRect(largest_contour))
+    return box.astype(np.float32) / scale
 
 
 def assess_quality(
@@ -420,23 +568,35 @@ def assess_quality(
     min_area_ratio: float,
     blur_threshold: float = DEFAULT_BLUR_THRESHOLD,
     solidity_threshold: float = DEFAULT_SOLIDITY_THRESHOLD,
+    prepared: tuple[list[np.ndarray], np.ndarray, float] | None = None,
 ) -> QualityIssues:
     """Đánh giá ảnh bị mờ (độ nét thấp) và tài liệu nghi bị nát/rách (viền
     lồi lõm bất thường). Phải chạy trên ảnh gốc trước khi crop, vì sau khi
     crop bằng four_point_crop, tài liệu luôn là một hình chữ nhật sạch nên
-    sẽ mất tín hiệu viền rách."""
+    sẽ mất tín hiệu viền rách.
+
+    `prepared`: xem ghi chú ở find_document_corners."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
     is_blurry = blur_score < blur_threshold
 
     solidity: float | None = None
-    prepared = _paper_contours(image, min_area_ratio)
+    if prepared is None:
+        prepared = _paper_contours(image, min_area_ratio)
     if prepared is not None:
         contours, _, _ = prepared
-        largest_contour = contours[0]
-        hull_area = cv2.contourArea(cv2.convexHull(largest_contour))
+        # Ưu tiên contour xấp xỉ được thành tứ giác sạch (giống hình tài
+        # liệu thật) để tính solidity; contour lớn nhất trong danh sách đôi
+        # khi chỉ là biên bị giãn nở/nối đứt quãng lồi lõm do chính bước xử
+        # lý ảnh tạo ra (không phải do tài liệu thật bị rách), dùng nó sẽ
+        # báo nhầm is_damaged.
+        reference_contour = next(
+            (contour for contour in contours if _approximate_quad(contour) is not None),
+            contours[0],
+        )
+        hull_area = cv2.contourArea(cv2.convexHull(reference_contour))
         if hull_area > 0:
-            solidity = cv2.contourArea(largest_contour) / hull_area
+            solidity = cv2.contourArea(reference_contour) / hull_area
 
     is_damaged = solidity is not None and solidity < solidity_threshold
 
@@ -453,20 +613,26 @@ def generate_debug_image(
     min_area_ratio: float,
     corners: np.ndarray | None,
     quality: QualityIssues,
+    prepared: tuple[list[np.ndarray], np.ndarray, float] | None = None,
 ) -> np.ndarray:
     """Vẽ overlay debug lên ảnh gốc (trước crop) để soi vì sao crop/chất
     lượng lại ra kết quả như vậy:
         - Các contour vùng giấy tìm được (viền xanh dương).
         - 4 góc đã chọn để crop, nếu có (viền xanh lá + chấm đỏ ở góc).
         - Chỉ số blur_score/solidity và cờ mờ/nát dạng chữ ở góc trên trái.
+
+    `prepared`: xem ghi chú ở find_document_corners.
     """
     debug_image = image.copy()
     scale_factor = max(image.shape[0], image.shape[1]) / 1500
 
-    prepared = _paper_contours(image, min_area_ratio)
+    if prepared is None:
+        prepared = _paper_contours(image, min_area_ratio)
     if prepared is not None:
         contours, _, contour_scale = prepared
-        for contour in contours:
+        # Chỉ vẽ vài contour lớn nhất; danh sách giờ gộp cả contour từ
+        # threshold lẫn Canny nên có thể khá dài, vẽ hết sẽ rối overlay.
+        for contour in contours[:5]:
             scaled_contour = (contour / contour_scale).astype(np.int32)
             cv2.drawContours(
                 debug_image, [scaled_contour], -1, (255, 128, 0), max(1, round(2 * scale_factor))
@@ -606,18 +772,24 @@ def scan_image(
     image = load_image_with_exif(input_path)
     original_image = image
 
+    # Tính một lần, dùng lại cho assess_quality/find_document_corners/
+    # generate_debug_image - bước này giờ chạy cả GrabCut nên khá tốn
+    # (hàng trăm ms), gọi lặp lại 2-3 lần cho cùng một ảnh sẽ rất lãng phí.
+    prepared = _paper_contours(original_image, min_area_ratio)
+
     # Đánh giá chất lượng trên ảnh gốc, trước khi crop làm mất tín hiệu viền rách.
     quality = assess_quality(
         image=original_image,
         min_area_ratio=min_area_ratio,
         blur_threshold=blur_threshold,
         solidity_threshold=solidity_threshold,
+        prepared=prepared,
     )
 
     cropped = False
     corners = None
     if crop:
-        corners = find_document_corners(original_image, min_area_ratio)
+        corners = find_document_corners(original_image, min_area_ratio, prepared=prepared)
         if corners is not None:
             image = four_point_crop(original_image, corners)
             cropped = True
@@ -625,7 +797,9 @@ def scan_image(
 
     debug_path: Path | None = None
     if debug:
-        debug_image = generate_debug_image(original_image, min_area_ratio, corners, quality)
+        debug_image = generate_debug_image(
+            original_image, min_area_ratio, corners, quality, prepared=prepared
+        )
         debug_path = output_path.with_name(f"{output_path.stem}_debug{output_path.suffix}")
         debug_path.parent.mkdir(parents=True, exist_ok=True)
         if not cv2.imwrite(str(debug_path), debug_image):
