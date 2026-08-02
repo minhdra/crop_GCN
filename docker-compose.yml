@@ -21,15 +21,16 @@ services:
     # Giới hạn tài nguyên - CẦN chỉnh lại theo cấu hình máy chủ thật (số
     # core/RAM khả dụng) trước khi dùng production. Compose CLI (docker
     # compose, không cần Swarm) áp dụng deploy.resources.limits. Giá trị
-    # dưới đây khớp với máy dev hiện tại (8 core / 16GB, Docker Desktop VM
-    # cấp 8 core / ~8GB) - đặt quá thấp so với core thật (ví dụ cpus: "2"
-    # trên máy 8 core) sẽ khiến job CPU-bound (OpenCV/PyMuPDF) chạy chậm hẳn
-    # so với chạy local không giới hạn.
+    # dưới đây dành cho server production (8 core vật lý/16 thread, chạy
+    # chung với service khác) - chủ động dành 4 core/4GB cho scanner-api,
+    # phần còn lại nhường cho service khác trên cùng máy. WEB_CONCURRENCY/
+    # SCAN_MAX_CONCURRENT_JOBS trong .env đã khớp theo ngân sách 4 core này
+    # (xem comment ở đó) - đổi cả hai cùng lúc nếu ngân sách CPU thay đổi.
     deploy:
       resources:
         limits:
-          cpus: "8"
-          memory: 6g
+          cpus: "4"
+          memory: 4g
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 30s
