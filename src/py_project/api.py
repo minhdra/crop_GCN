@@ -25,6 +25,7 @@ import anyio.to_thread
 import cv2
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from py_project.document_scanner import (
@@ -169,6 +170,17 @@ app = FastAPI(
     version="1.0.0",
     lifespan=_lifespan,
 )
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+print("CORS middleware loaded")
 
 VALID_ROTATIONS = (0, 90, 180, 270)
 
