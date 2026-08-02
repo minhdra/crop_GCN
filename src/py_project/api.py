@@ -74,11 +74,27 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 
 # Số job xử lý (scan_image/scan_pdf) chạy đồng thời tối đa trên MỖI process.
-# Vượt quá số này, request mới bị từ chối ngay (503) thay vì xếp hàng vô hạn
-# định. Với nhiều worker process (xem WEB_CONCURRENCY), tổng số job đồng thời
+# Request vượt quá số này CHỜ (xếp hàng) tối đa SCAN_QUEUE_TIMEOUT_SECONDS
+# để có slot trống, thay vì bị từ chối ngay - vì client gọi vào (app chụp
+# ảnh) không tự động retry khi gặp 503, nên từ chối ngay = ảnh bị mất thẳng
+# với người dùng. Chỉ trả 503 nếu chờ quá lâu (hàng đợi thật sự quá tải).
+# Với nhiều worker process (xem WEB_CONCURRENCY), tổng số job đồng thời
 # thực tế = WEB_CONCURRENCY * SCAN_MAX_CONCURRENT_JOBS.
 MAX_CONCURRENT_JOBS = int(os.environ.get("SCAN_MAX_CONCURRENT_JOBS", "4"))
 _JOB_SEMAPHORE = threading.Semaphore(MAX_CONCURRENT_JOBS)
+
+# Thời gian tối đa (giây) một request chờ có slot xử lý trống trước khi bị
+# từ chối bằng 503. Nên nhỏ hơn timeout phía client để client biết chắc
+# request đã thất bại thay vì bị client tự hủy giữa chừng trong lúc server
+# vẫn đang xử lý.
+QUEUE_TIMEOUT_SECONDS = float(os.environ.get("SCAN_QUEUE_TIMEOUT_SECONDS", "20"))
+
+# Số request tối đa được giữ (đa số ở trạng thái chờ semaphore, gần như
+# không tốn CPU) trong threadpool của MỖI process cùng lúc, để chịu được
+# burst > MAX_CONCURRENT_JOBS mà không bị chặn ở tầng threadpool (nơi
+# KHÔNG áp dụng SCAN_QUEUE_TIMEOUT_SECONDS). Nên đặt lớn hơn hẳn burst tối
+# đa dự kiến từ client.
+MAX_QUEUED_REQUESTS = int(os.environ.get("SCAN_MAX_QUEUED_REQUESTS", "40"))
 
 # Kích thước file upload tối đa (MB) cho mỗi file, chặn sớm trước khi tốn
 # CPU xử lý ảnh/PDF quá khổ.
@@ -129,12 +145,13 @@ async def _periodic_cleanup_loop() -> None:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Khớp số luồng threadpool (nơi FastAPI chạy các route `def` đồng bộ)
-    với MAX_CONCURRENT_JOBS, để không tạo dư luồng chờ so với mức xử lý
-    thực tế cho phép (xem _JOB_SEMAPHORE). Đồng thời dọn file/job hết hạn
-    ngay khi khởi động và định kỳ trong lúc chạy."""
+    """Đặt số luồng threadpool (nơi FastAPI chạy các route `def` đồng bộ)
+    theo MAX_QUEUED_REQUESTS - lớn hơn MAX_CONCURRENT_JOBS vì đa số luồng
+    chỉ đang chờ _JOB_SEMAPHORE (xem QUEUE_TIMEOUT_SECONDS), không xử lý
+    CPU. Đồng thời dọn file/job hết hạn ngay khi khởi động và định kỳ
+    trong lúc chạy."""
     anyio.to_thread.current_default_thread_limiter().total_tokens = max(
-        MAX_CONCURRENT_JOBS, 4
+        MAX_QUEUED_REQUESTS, MAX_CONCURRENT_JOBS
     )
     _cleanup_expired_files()
     cleanup_task = asyncio.create_task(_periodic_cleanup_loop())
@@ -297,14 +314,17 @@ def _process_one(
     input_path = job_dir / f"input{suffix}"
 
     # Giới hạn số job xử lý đồng thời trên process này; nếu đang quá tải thì
-    # từ chối ngay (503) thay vì để request xếp hàng vô hạn định.
-    if not _JOB_SEMAPHORE.acquire(blocking=False):
+    # CHỜ tối đa QUEUE_TIMEOUT_SECONDS cho có slot trống (client không tự
+    # retry khi gặp 503 - xếp hàng có giới hạn thời gian an toàn hơn từ
+    # chối ngay). Chỉ từ chối (503) nếu chờ quá lâu, tức hàng đợi thật sự
+    # quá tải kéo dài chứ không phải một burst ngắn.
+    if not _JOB_SEMAPHORE.acquire(timeout=QUEUE_TIMEOUT_SECONDS):
         shutil.rmtree(job_dir, ignore_errors=True)
         upload.file.close()
         raise HTTPException(
             status_code=503,
             detail="Server đang xử lý quá nhiều yêu cầu, vui lòng thử lại sau.",
-            headers={"Retry-After": "2"},
+            headers={"Retry-After": str(int(QUEUE_TIMEOUT_SECONDS))},
         )
 
     try:

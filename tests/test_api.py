@@ -171,8 +171,10 @@ def test_scan_returns_503_when_concurrency_limit_reached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Semaphore đã cạn (0 slot) mô phỏng server đang xử lý hết công suất
-    # cho phép; request mới phải bị từ chối ngay bằng 503, không xếp hàng.
+    # cho phép; request mới chờ hết QUEUE_TIMEOUT_SECONDS (patch xuống rất
+    # nhỏ để test nhanh) rồi mới bị từ chối bằng 503.
     monkeypatch.setattr(api_module, "_JOB_SEMAPHORE", threading.Semaphore(0))
+    monkeypatch.setattr(api_module, "QUEUE_TIMEOUT_SECONDS", 0.05)
 
     response = client.post(
         "/api/scan",
