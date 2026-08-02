@@ -18,14 +18,18 @@ services:
     volumes:
       - ./output_scans:/app/output_scans
     restart: unless-stopped
-    # Giới hạn tài nguyên khởi điểm - CẦN chỉnh lại theo cấu hình máy chủ
-    # thật (số core/RAM khả dụng) trước khi dùng production. Compose CLI
-    # (docker compose, không cần Swarm) áp dụng deploy.resources.limits.
+    # Giới hạn tài nguyên - CẦN chỉnh lại theo cấu hình máy chủ thật (số
+    # core/RAM khả dụng) trước khi dùng production. Compose CLI (docker
+    # compose, không cần Swarm) áp dụng deploy.resources.limits. Giá trị
+    # dưới đây khớp với máy dev hiện tại (8 core / 16GB, Docker Desktop VM
+    # cấp 8 core / ~8GB) - đặt quá thấp so với core thật (ví dụ cpus: "2"
+    # trên máy 8 core) sẽ khiến job CPU-bound (OpenCV/PyMuPDF) chạy chậm hẳn
+    # so với chạy local không giới hạn.
     deploy:
       resources:
         limits:
-          cpus: "2"
-          memory: 2g
+          cpus: "8"
+          memory: 6g
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 30s

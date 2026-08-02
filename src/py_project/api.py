@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Annotated, AsyncIterator, Literal, List
 
 import anyio.to_thread
+import cv2
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -40,6 +41,19 @@ from py_project.schemas import BatchScanResult, ScanResult
 # qua Docker (xem docker-compose.yml). Cho phép chạy `uvicorn`/`scan-api`
 # cục bộ cũng đọc được cấu hình từ .env giống như khi chạy qua Docker.
 load_dotenv()
+
+# Mặc định OpenCV tự dùng thread pool nội bộ (parallel_for_) bằng số CPU
+# NÓ PHÁT HIỆN ĐƯỢC (thường là số core của máy host/VM, không phải số core
+# cgroup thực sự cấp cho container). Với nhiều worker process
+# (WEB_CONCURRENCY) và nhiều job đồng thời/process (SCAN_MAX_CONCURRENT_JOBS)
+# cùng gọi OpenCV, mỗi job lại tự giành nhiều thread -> tổng số thread tranh
+# CPU vượt xa số core thật, gây tranh chấp (oversubscription) và làm request
+# chậm hẳn khi có tải đồng thời, dù CPU vẫn "bận 100%". Giới hạn về 1 để mỗi
+# job dùng đúng 1 core, nhường việc chạy song song cho tầng
+# process/threadpool (đã kiểm soát bằng WEB_CONCURRENCY *
+# SCAN_MAX_CONCURRENT_JOBS) thay vì để OpenCV tự nhân đôi song song bên
+# trong. Chỉnh qua CV2_NUM_THREADS nếu cần thử nghiệm giá trị khác.
+cv2.setNumThreads(int(os.environ.get("CV2_NUM_THREADS", "1")))
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".heic"}
 
