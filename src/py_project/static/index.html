@@ -270,6 +270,7 @@
     const resultsBody = resultsTable.querySelector("tbody");
 
     let selectedFiles = [];
+    let originalFileUrls = [];
 
     function formatSize(bytes)
     {
@@ -376,6 +377,13 @@
 
         const linkCell = document.createElement("td");
         linkCell.className = "actions";
+        if (result.originalFileUrl) {
+          const a = document.createElement("a");
+          a.href = result.originalFileUrl;
+          a.target = "_blank";
+          a.textContent = "Xem gốc";
+          linkCell.appendChild(a);
+        }
         if (result.view_url) {
           const a = document.createElement("a");
           a.href = result.view_url;
@@ -448,6 +456,9 @@
 
       submitBtn.disabled = true;
 
+      originalFileUrls.forEach((url) => URL.revokeObjectURL(url));
+      originalFileUrls = [];
+
       const options = {
         mode: document.getElementById("opt-mode").value,
         rotate: document.getElementById("opt-rotate").value,
@@ -463,6 +474,9 @@
         const file = selectedFiles[i];
         statusLine.textContent = `Đang xử lý file ${i + 1}/${selectedFiles.length}: ${file.name}...`;
         const result = await scanOneFile(file, options);
+        const originalFileUrl = URL.createObjectURL(file);
+        originalFileUrls.push(originalFileUrl);
+        result.originalFileUrl = originalFileUrl;
         results.push(result);
         renderResults(results);
       }
