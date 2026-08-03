@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import fcntl
 import os
 import re
 import shutil
@@ -119,26 +120,53 @@ OUTPUT_TTL_SECONDS = int(os.environ.get("SCAN_OUTPUT_TTL_DAYS", "30")) * 86400
 CLEANUP_INTERVAL_SECONDS = int(os.environ.get("SCAN_CLEANUP_INTERVAL_MINUTES", "60")) * 60
 
 
+# Lock file để đảm bảo chỉ MỘT worker process chạy dọn dẹp mỗi lượt, dù có
+# bao nhiêu process (WEB_CONCURRENCY). STORAGE_DIR/OUTPUT_DIR là thư mục
+# dùng CHUNG trên đĩa giữa các worker process cùng host - nếu không khóa,
+# mỗi lượt dọn (định kỳ + lúc khởi động) sẽ bị chạy trùng lặp ở TẤT CẢ
+# worker process cùng lúc, quét/stat cùng một tập file N lần (N =
+# WEB_CONCURRENCY). Với VM nhiều core (WEB_CONCURRENCY cao để tận dụng
+# CPU), phần dọn dẹp dư thừa này càng nặng thêm đúng lúc host cần dồn I/O
+# cho xử lý request, phản tác dụng với việc tăng core để tăng throughput.
+_CLEANUP_LOCK_PATH = STORAGE_DIR.parent / ".py_project_scan_cleanup.lock"
+
+
 def _cleanup_expired_files() -> None:
     """Xóa job tạm (STORAGE_DIR) quá SCAN_STORAGE_TTL_HOURS và bản lưu lâu
     dài (OUTPUT_DIR) quá SCAN_OUTPUT_TTL_DAYS. Dựa trên thời gian sửa đổi
     (mtime) - job dir/file chỉ được ghi một lần lúc xử lý nên mtime phản
-    ánh đúng thời điểm hoàn tất."""
-    now = time.time()
+    ánh đúng thời điểm hoàn tất.
 
-    for job_dir in STORAGE_DIR.iterdir():
-        try:
-            if job_dir.is_dir() and now - job_dir.stat().st_mtime > STORAGE_TTL_SECONDS:
-                shutil.rmtree(job_dir, ignore_errors=True)
-        except OSError:
-            continue
+    Dùng flock không chặn (LOCK_NB) để chỉ 1 worker process thực hiện dọn
+    dẹp mỗi lượt gọi; các process khác bỏ qua lượt này thay vì quét trùng
+    lặp (xem _CLEANUP_LOCK_PATH). flock tự giải phóng nếu process giữ lock
+    chết đột ngột, không để lại lock "kẹt" vĩnh viễn."""
+    lock_file = open(_CLEANUP_LOCK_PATH, "w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lock_file.close()
+        return
 
-    for output_file in OUTPUT_DIR.iterdir():
-        try:
-            if output_file.is_file() and now - output_file.stat().st_mtime > OUTPUT_TTL_SECONDS:
-                output_file.unlink(missing_ok=True)
-        except OSError:
-            continue
+    try:
+        now = time.time()
+
+        for job_dir in STORAGE_DIR.iterdir():
+            try:
+                if job_dir.is_dir() and now - job_dir.stat().st_mtime > STORAGE_TTL_SECONDS:
+                    shutil.rmtree(job_dir, ignore_errors=True)
+            except OSError:
+                continue
+
+        for output_file in OUTPUT_DIR.iterdir():
+            try:
+                if output_file.is_file() and now - output_file.stat().st_mtime > OUTPUT_TTL_SECONDS:
+                    output_file.unlink(missing_ok=True)
+            except OSError:
+                continue
+    finally:
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+        lock_file.close()
 
 
 async def _periodic_cleanup_loop() -> None:
