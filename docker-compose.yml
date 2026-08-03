@@ -2,9 +2,11 @@ services:
   scanner-api:
     build: .
     ports:
-      # Chỉ bind vào localhost để tránh lộ API (không có auth) ra cả mạng LAN.
-      # Nếu thực sự cần truy cập từ máy khác, đổi thành "8090:8090" và tự thêm auth/reverse proxy.
-      - "127.0.0.1:8090:8090"
+      # Bind ra mọi interface (0.0.0.0) - API KHÔNG có auth, bất kỳ ai truy
+      # cập được cổng 8090 trên máy/mạng này đều upload/xử lý file được.
+      # Chỉ dùng khi mạng đã tin cậy; cân nhắc thêm auth/reverse proxy nếu
+      # expose ra internet.
+      - "8090:8090"
     # Nạp toàn bộ biến tinh chỉnh (TTL dọn dẹp, giới hạn tải...) từ .env -
     # xem mô tả đầy đủ từng biến trong .env.example. Copy .env.example
     # thành .env trước khi chạy `docker compose up` nếu chưa có.
