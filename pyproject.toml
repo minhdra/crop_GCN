@@ -12,6 +12,7 @@ dependencies = [
     "opencv-python-headless>=4.10",
     "PyMuPDF>=1.24",
     "Pillow>=10.0",
+    "pillow-heif>=0.18",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "python-multipart>=0.0.9",
@@ -25,3 +26,6 @@ scan-api = "py_project.api:run"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+py_project = ["static/*.html"]

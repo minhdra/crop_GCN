@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from PIL import Image, ImageOps
+import pillow_heif
 
 import argparse
 from dataclasses import dataclass, field
@@ -10,6 +11,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 import fitz  # PyMuPDF
+
+# Đăng ký decoder HEIF/HEIC cho Pillow - mặc định Pillow không đọc được ảnh
+# .heic (định dạng mặc định của iPhone khi chụp ảnh), Image.open() sẽ raise
+# UnidentifiedImageError nếu thiếu bước này.
+pillow_heif.register_heif_opener()
 
 DEFAULT_BLUR_THRESHOLD = 100.0
 DEFAULT_SOLIDITY_THRESHOLD = 0.85

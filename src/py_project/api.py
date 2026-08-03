@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from py_project.document_scanner import (
     DEFAULT_BLUR_THRESHOLD,
@@ -58,6 +59,11 @@ cv2.setNumThreads(int(os.environ.get("CV2_NUM_THREADS", "1")))
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".heic"}
 
+# cv2.imwrite không hỗ trợ ghi các định dạng này (chỉ đọc được nhờ
+# load_image_with_exif dùng Pillow/pillow-heif) - ảnh output phải đổi sang
+# đuôi khác mà OpenCV ghi được, ví dụ .heic (ảnh mặc định từ iPhone) -> .jpg.
+OUTPUT_EXTENSION_OVERRIDES = {".heic": ".jpg"}
+
 # Thư mục lưu tạm file input/output của từng lần xử lý (dùng cho /api/download, /api/view).
 STORAGE_DIR = Path(tempfile.gettempdir()) / "py_project_scan_results"
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -72,7 +78,7 @@ OUTPUT_DIR = Path(
 )
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 # Số job xử lý (scan_image/scan_pdf) chạy đồng thời tối đa trên MỖI process.
 # Request vượt quá số này CHỜ (xếp hàng) tối đa SCAN_QUEUE_TIMEOUT_SECONDS
@@ -181,6 +187,15 @@ app.add_middleware(
 )
 
 print("CORS middleware loaded")
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.get("/", include_in_schema=False)
+async def index() -> FileResponse:
+    """Trang chủ: giao diện upload/xử lý file tĩnh tại static/index.html."""
+    return FileResponse(STATIC_DIR / "index.html")
+
 
 VALID_ROTATIONS = (0, 90, 180, 270)
 
@@ -382,7 +397,8 @@ def _process_one(
                 debug_page_count=debug_page_count,
             )
 
-        output_path = job_dir / f"output{suffix}"
+        output_suffix = OUTPUT_EXTENSION_OVERRIDES.get(suffix, suffix)
+        output_path = job_dir / f"output{output_suffix}"
         cropped, quality, debug_path = scan_image(
             input_path=input_path,
             output_path=output_path,

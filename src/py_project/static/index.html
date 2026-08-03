@@ -377,20 +377,20 @@
         linkCell.className = "actions";
         if (result.view_url) {
           const a = document.createElement("a");
-          a.href = `http://localhost:8000${result.view_url}`;
+          a.href = result.view_url;
           a.target = "_blank";
           a.textContent = "Xem";
           linkCell.appendChild(a);
         }
         if (result.download_url) {
           const a = document.createElement("a");
-          a.href = `http://localhost:8000${result.download_url}`;
+          a.href = result.download_url;
           a.textContent = "Tải";
           linkCell.appendChild(a);
         }
         if (result.debug_url) {
           const a = document.createElement("a");
-          a.href = `http://localhost:8000${result.debug_url}`;
+          a.href = result.debug_url;
           a.target = "_blank";
           a.textContent = "Debug";
           linkCell.appendChild(a);
@@ -420,8 +420,7 @@
       formData.append("debug", document.getElementById("opt-debug").checked);
 
       try {
-        const response = await fetch("http://localhost:8000/api/scan/batch", {
-          // method: "POST", body: formData 
+        const response = await fetch("/api/scan/batch", {
           method: "POST",
           body: formData
         });
