@@ -3,7 +3,7 @@
 Chạy server:
     uvicorn py_project.api:app --reload
 
-Sau đó xem tài liệu API tại http://127.0.0.1:8000/docs
+Sau đó xem tài liệu API tại http://127.0.0.1:8090/docs
 """
 
 from __future__ import annotations
@@ -639,7 +639,7 @@ def view_debug_image(job_id: str, page: int = 1) -> FileResponse:
     )
 
 
-def run(host: str = "127.0.0.1", port: int = 8000) -> None:
+def run(host: str = "127.0.0.1", port: int = 8090) -> None:
     """Chạy server FastAPI bằng uvicorn (dùng cho lệnh script)."""
     import uvicorn
 

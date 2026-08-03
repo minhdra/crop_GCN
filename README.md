@@ -35,12 +35,12 @@ uvicorn py_project.api:app --reload
 # hoặc: scan-api
 ```
 
-Xem tài liệu tương tác tại http://127.0.0.1:8000/docs
+Xem tài liệu tương tác tại http://127.0.0.1:8090/docs
 
 ### Xử lý một file
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/scan \
+curl -X POST http://127.0.0.1:8090/api/scan \
   -F "file=@input.pdf" \
   -F "mode=scan" \
   -F "rotate=0"
@@ -79,20 +79,20 @@ crop, xem mục [Debug crop](#debug-crop) ở trên). Với PDF, `debug_page_cou
 cho biết số trang có ảnh debug; lấy từng trang bằng `?page=N` (mặc định 1):
 
 ```bash
-curl "http://127.0.0.1:8000/api/debug/<job_id>?page=2"
+curl "http://127.0.0.1:8090/api/debug/<job_id>?page=2"
 ```
 
 Tải file kết quả (buộc trình duyệt lưu về máy):
 
 ```bash
-curl -OJ http://127.0.0.1:8000/api/download/<job_id>
+curl -OJ http://127.0.0.1:8090/api/download/<job_id>
 ```
 
 Xem trực tiếp (hiển thị inline — dùng làm link ảnh để nhúng `<img src="...">`
 hoặc mở nhanh trên trình duyệt):
 
 ```
-http://127.0.0.1:8000/api/view/<job_id>
+http://127.0.0.1:8090/api/view/<job_id>
 ```
 
 Ngoài ra, mỗi kết quả còn được lưu thêm một bản vào thư mục `output_scans/`
@@ -104,7 +104,7 @@ chính xác file đó nằm ở đâu. Đổi thư mục này qua biến môi tr
 ### Xử lý nhiều file
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/scan/batch \
+curl -X POST http://127.0.0.1:8090/api/scan/batch \
   -F "files=@a.pdf" -F "files=@b.jpg" \
   -F "mode=bw"
 ```
@@ -123,7 +123,7 @@ tin cậy. Mặc định trong `docker-compose.yml`, cổng chỉ được bind 
 
 ## Docker
 
-Chạy bằng Docker Compose (build image, expose cổng `8000` chỉ trên
+Chạy bằng Docker Compose (build image, expose cổng `8090` chỉ trên
 localhost, mount thư mục `output_scans/` ra ngoài host để đối soát trực
 tiếp):
 
@@ -134,8 +134,8 @@ docker compose up -d --build
 Kiểm tra:
 
 ```bash
-curl http://127.0.0.1:8000/health
-curl -X POST http://127.0.0.1:8000/api/scan -F "file=@input_pdf/1.jpeg"
+curl http://127.0.0.1:8090/health
+curl -X POST http://127.0.0.1:8090/api/scan -F "file=@input_pdf/1.jpeg"
 ```
 
 Xem log / dừng:
@@ -228,4 +228,5 @@ python batch_scan.py photo.jpg scan_result.jpg --debug
 ```bash
 python -m pytest
 ```
+
 # Crop_GCN

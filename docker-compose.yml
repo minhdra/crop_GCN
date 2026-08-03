@@ -3,8 +3,8 @@ services:
     build: .
     ports:
       # Chỉ bind vào localhost để tránh lộ API (không có auth) ra cả mạng LAN.
-      # Nếu thực sự cần truy cập từ máy khác, đổi thành "8000:8000" và tự thêm auth/reverse proxy.
-      - "127.0.0.1:8000:8000"
+      # Nếu thực sự cần truy cập từ máy khác, đổi thành "8090:8090" và tự thêm auth/reverse proxy.
+      - "127.0.0.1:8090:8090"
     # Nạp toàn bộ biến tinh chỉnh (TTL dọn dẹp, giới hạn tải...) từ .env -
     # xem mô tả đầy đủ từng biến trong .env.example. Copy .env.example
     # thành .env trước khi chạy `docker compose up` nếu chưa có.
@@ -32,7 +32,7 @@ services:
           cpus: "4"
           memory: 4g
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/health', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
