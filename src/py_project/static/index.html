@@ -253,6 +253,7 @@
         <th>File</th>
         <th>Trạng thái</th>
         <th>Chi tiết</th>
+        <th>Thời gian</th>
         <th>Liên kết</th>
       </tr>
     </thead>
@@ -367,11 +368,11 @@
         detailCell.textContent = details.join(" · ") || "-";
         row.appendChild(detailCell);
 
-        // const timeCell = document.createElement("td");
-        // timeCell.textContent = result.processing_time_seconds != null
-        //   ? `${result.processing_time_seconds.toFixed(2)}s`
-        //   : "-";
-        // row.appendChild(timeCell);
+        const timeCell = document.createElement("td");
+        timeCell.textContent = result.processing_time_seconds != null
+          ? `${result.processing_time_seconds.toFixed(2)}s`
+          : "-";
+        row.appendChild(timeCell);
 
         const linkCell = document.createElement("td");
         linkCell.className = "actions";
@@ -402,40 +403,73 @@
       resultsTable.hidden = results.length === 0;
     }
 
+    async function scanOneFile(file, options)
+    {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("mode", options.mode);
+      formData.append("rotate", options.rotate);
+      formData.append("dpi", options.dpi);
+      formData.append("crop", options.crop);
+      formData.append("debug", options.debug);
+
+      const startedAt = performance.now();
+      try {
+        const response = await fetch("/api/scan", {
+          method: "POST",
+          body: formData
+        });
+        const processingTime = (performance.now() - startedAt) / 1000;
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => ({}));
+          return {
+            filename: file.name,
+            status: "error",
+            message: errorBody.detail ? JSON.stringify(errorBody.detail) : `HTTP ${response.status}`,
+            processing_time_seconds: processingTime
+          };
+        }
+        const result = await response.json();
+        result.processing_time_seconds = processingTime;
+        return result;
+      } catch (error) {
+        return {
+          filename: file.name,
+          status: "error",
+          message: error.message,
+          processing_time_seconds: (performance.now() - startedAt) / 1000
+        };
+      }
+    }
+
     submitBtn.addEventListener("click", async () =>
     {
       if (selectedFiles.length === 0) return;
 
       submitBtn.disabled = true;
-      statusLine.textContent = `Đang xử lý ${selectedFiles.length} file...`;
 
-      const formData = new FormData();
-      for (const file of selectedFiles) {
-        formData.append("files", file);
-      }
-      formData.append("mode", document.getElementById("opt-mode").value);
-      formData.append("rotate", document.getElementById("opt-rotate").value);
-      formData.append("dpi", document.getElementById("opt-dpi").value);
-      formData.append("crop", document.getElementById("opt-crop").checked);
-      formData.append("debug", document.getElementById("opt-debug").checked);
+      const options = {
+        mode: document.getElementById("opt-mode").value,
+        rotate: document.getElementById("opt-rotate").value,
+        dpi: document.getElementById("opt-dpi").value,
+        crop: document.getElementById("opt-crop").checked,
+        debug: document.getElementById("opt-debug").checked
+      };
 
-      try {
-        const response = await fetch("/api/scan/batch", {
-          method: "POST",
-          body: formData
-        });
-        if (!response.ok) {
-          const errorBody = await response.json().catch(() => ({}));
-          throw new Error(errorBody.detail ? JSON.stringify(errorBody.detail) : `HTTP ${response.status}`);
-        }
-        const body = await response.json();
-        renderResults(body.results);
-        statusLine.textContent = `Xong: ${body.results.length} file đã xử lý.`;
-      } catch (error) {
-        statusLine.textContent = `Lỗi: ${error.message}`;
-      } finally {
-        submitBtn.disabled = selectedFiles.length === 0;
+      const results = [];
+      renderResults(results);
+
+      for (let i = 0; i < selectedFiles.length; i++) {
+        const file = selectedFiles[i];
+        statusLine.textContent = `Đang xử lý file ${i + 1}/${selectedFiles.length}: ${file.name}...`;
+        const result = await scanOneFile(file, options);
+        results.push(result);
+        renderResults(results);
       }
+
+      const totalTime = results.reduce((sum, r) => sum + (r.processing_time_seconds || 0), 0);
+      statusLine.textContent = `Xong: ${results.length} file đã xử lý trong ${totalTime.toFixed(2)}s.`;
+      submitBtn.disabled = selectedFiles.length === 0;
     });
   </script>
 </body>
