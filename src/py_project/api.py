@@ -387,6 +387,7 @@ def _process_one(
 
         if suffix == ".pdf":
             output_path = job_dir / "output.pdf"
+            processing_started_at = time.perf_counter()
             summary = scan_pdf(
                 input_path=input_path,
                 output_path=output_path,
@@ -401,6 +402,7 @@ def _process_one(
                 solidity_threshold=solidity_threshold,
                 debug=debug,
             )
+            processing_time_seconds = time.perf_counter() - processing_started_at
             warnings = _pdf_quality_warnings(
                 summary.blurry_page_numbers, summary.damaged_page_numbers
             )
@@ -423,10 +425,12 @@ def _process_one(
                 saved_path=str(persisted_path),
                 debug_url=f"/api/debug/{job_id}" if debug_page_count else None,
                 debug_page_count=debug_page_count,
+                processing_time_seconds=processing_time_seconds,
             )
 
         output_suffix = OUTPUT_EXTENSION_OVERRIDES.get(suffix, suffix)
         output_path = job_dir / f"output{output_suffix}"
+        processing_started_at = time.perf_counter()
         cropped, quality, debug_path = scan_image(
             input_path=input_path,
             output_path=output_path,
@@ -439,6 +443,7 @@ def _process_one(
             solidity_threshold=solidity_threshold,
             debug=debug,
         )
+        processing_time_seconds = time.perf_counter() - processing_started_at
         warnings = _image_quality_warnings(quality)
         persisted_path = _persist_output_copy(job_id, original_name, output_path)
         return ScanResult(
@@ -452,6 +457,7 @@ def _process_one(
             view_url=f"/api/view/{job_id}",
             saved_path=str(persisted_path),
             debug_url=f"/api/debug/{job_id}" if debug_path is not None else None,
+            processing_time_seconds=processing_time_seconds,
         )
     except ValueError as error:
         shutil.rmtree(job_dir, ignore_errors=True)

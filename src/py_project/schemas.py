@@ -32,6 +32,7 @@ class ScanResult(BaseModel):
     saved_path: str | None = None
     debug_url: str | None = None
     debug_page_count: int | None = None
+    processing_time_seconds: float | None = None
 
 
 class BatchScanResult(BaseModel):

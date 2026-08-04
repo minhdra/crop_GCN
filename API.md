@@ -86,6 +86,7 @@ curl -X POST http://127.0.0.1:8090/api/scan \
 | `saved_path` | string \| null | Đường dẫn tuyệt đối trên đĩa server nơi lưu bản sao kết quả (thư mục `output_scans/`), null nếu lỗi. |
 | `debug_url` | string \| null | Đường dẫn xem ảnh debug (`/api/debug/<job_id>`) — chỉ có khi gọi với `debug=true` và có sinh được ảnh debug. |
 | `debug_page_count` | int \| null | Số trang có ảnh debug — **chỉ PDF** khi `debug=true`. |
+| `processing_time_seconds` | float \| null | Thời gian xử lý **thật trên server** (giây) — chỉ tính thời gian chạy `scan_pdf`/`scan_image`, không tính thời gian upload file lên hay round-trip mạng. `null` nếu xử lý lỗi trước khi bắt đầu. |
 
 Lưu ý: các field theo trang (`total_pages`, `cropped_pages`, `blurry_pages`, `damaged_pages`, `blurry_page_numbers`, `damaged_page_numbers`) chỉ có giá trị khi input là PDF; ngược lại (input là ảnh lẻ) dùng `cropped`/`is_blurry`/`is_damaged`. Trường không áp dụng sẽ là `null`.
 
@@ -105,7 +106,8 @@ Lưu ý: các field theo trang (`total_pages`, `cropped_pages`, `blurry_pages`, 
   "view_url": "/api/view/<job_id>",
   "saved_path": "/duong/dan/output_scans/<job_id>_input.pdf",
   "debug_url": null,
-  "debug_page_count": null
+  "debug_page_count": null,
+  "processing_time_seconds": 1.842
 }
 ```
 
