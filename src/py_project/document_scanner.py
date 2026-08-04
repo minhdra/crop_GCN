@@ -436,16 +436,37 @@ def _paper_contours(
     # cùng kết quả). Chỉ mồi bằng contour ĐÃ LỌC (không phải toàn bộ danh
     # sách thô), vì contour thô đôi khi dính nhầm nền (như vùng lóa sáng) -
     # mồi bằng vùng sai sẽ khiến GrabCut khóa cứng luôn phần sai đó.
-    fast_valid_contours = _filter_candidate_contours(
+    fast_valid_contours, _ = _filter_candidate_contours(
         list(contours_thresh) + contours_edges, resized.shape, min_area_ratio
     )
     grabcut_contours = _grabcut_contours(
         resized, fast_valid_contours[0] if fast_valid_contours else None
     )
 
-    contours = list(contours_thresh) + contours_edges + grabcut_contours
+    # GrabCut lọc riêng với ngưỡng "đặc hình chữ nhật" lỏng hơn (xem lý do
+    # trong _filter_candidate_contours) - không gộp chung vào contours_thresh
+    # + contours_edges trước khi lọc như cũ, vì ngưỡng chặt 1.2 áp cho cả 3
+    # nguồn sẽ loại đúng contour GrabCut cần dùng để bắt được toàn bộ tài
+    # liệu nhiều màu (bìa + trang trắng).
+    thresh_edge_contours, thresh_edge_frame_filling = _filter_candidate_contours(
+        list(contours_thresh) + contours_edges, resized.shape, min_area_ratio
+    )
+    grabcut_valid_contours, grabcut_frame_filling = _filter_candidate_contours(
+        grabcut_contours, resized.shape, min_area_ratio, rectangularity_ratio=1.5
+    )
+    valid_contours = thresh_edge_contours + grabcut_valid_contours
+    valid_contours.sort(key=cv2.contourArea, reverse=True)
 
-    valid_contours = _filter_candidate_contours(contours, resized.shape, min_area_ratio)
+    # Có một contour đủ lớn/đủ đặc hình chữ nhật nhưng bị loại chỉ vì chạm
+    # quá nhiều cạnh ảnh (hoặc gần phủ kín khung hình) - đây là dấu hiệu tài
+    # liệu thật đã chiếm gần trọn khung hình (ảnh chụp/scan cắt sát mép sẵn,
+    # không còn nền xung quanh để so sánh tương phản) chứ không phải nền dính
+    # vào tài liệu. Trong tình huống đó, các contour nhỏ hơn tìm được (nếu
+    # có) rất dễ chỉ là một chi tiết in bên trong tài liệu (như viền bảng)
+    # thay vì mép giấy thật - không đáng tin để crop, thà bỏ qua giữ nguyên
+    # ảnh gốc còn hơn cắt nhầm mất nội dung thật ở phần chạm cạnh.
+    if thresh_edge_frame_filling or grabcut_frame_filling:
+        return None
 
     if not valid_contours:
         return None
@@ -454,12 +475,30 @@ def _paper_contours(
 
 
 def _filter_candidate_contours(
-    contours: list[np.ndarray], image_shape: tuple[int, ...], min_area_ratio: float
-) -> list[np.ndarray]:
+    contours: list[np.ndarray],
+    image_shape: tuple[int, ...],
+    min_area_ratio: float,
+    rectangularity_ratio: float = 1.2,
+) -> tuple[list[np.ndarray], bool]:
     """Lọc và sắp xếp giảm dần theo diện tích các contour đủ lớn và không
-    chạm từ 3 cạnh ảnh trở lên."""
+    chạm từ 3 cạnh ảnh trở lên.
+
+    `rectangularity_ratio`: ngưỡng tỉ lệ minAreaRect/diện tích contour tối đa
+    được coi là "đặc hình chữ nhật" (xem giải thích chi tiết bên dưới). Mặc
+    định 1.2 phù hợp với contour từ threshold/Canny (biên khá sắc nét). Biên
+    GrabCut vốn lượn sóng nhẹ hơn nhiều so với biên nhị phân/Canny (viền theo
+    phân bố màu học được thay vì so sánh độ sáng cứng), và khi tài liệu có 2
+    vùng màu khác nhau kề nhau (bìa màu + trang trắng, ngăn cách bởi khoảng
+    hở/gáy sách) tỉ lệ này càng cao hơn nữa dù không phải nhiễu - nên gọi hàm
+    này với `rectangularity_ratio` lỏng hơn (~1.5) riêng cho contour nguồn
+    GrabCut thay vì áp chung 1.2 cho mọi nguồn.
+
+    Trả về thêm cờ thứ hai: True nếu có contour đủ diện tích tối thiểu và đủ
+    đặc hình chữ nhật, nhưng bị loại chỉ vì chạm quá nhiều cạnh ảnh hoặc gần
+    phủ kín khung hình - xem chú thích ở nơi gọi hàm này trong
+    `_paper_contours`."""
     if not contours:
-        return []
+        return [], False
 
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
     image_area = image_shape[0] * image_shape[1]
@@ -471,23 +510,11 @@ def _filter_candidate_contours(
     maximum_area = image_area * 0.92
     margin = 5
     valid_contours = []
+    frame_filling_candidate_found = False
 
     for contour in contours:
         contour_area = cv2.contourArea(contour)
-        if contour_area < minimum_area or contour_area > maximum_area:
-            continue
-
-        # Loại bỏ contour chạm từ 3 cạnh ảnh trở lên - tài liệu thật luôn có
-        # lề nhìn thấy được ít nhất ở 2 phía đối diện; chạm gần hết các cạnh
-        # thường là nền/toàn khung hình bị dính vào vùng tách được.
-        x, y, w, h = cv2.boundingRect(contour)
-        touched_borders = sum([
-            x <= margin,
-            y <= margin,
-            x + w >= image_shape[1] - 1 - margin,
-            y + h >= image_shape[0] - 1 - margin,
-        ])
-        if touched_borders >= 3:
+        if contour_area < minimum_area:
             continue
 
         # Loại bỏ contour không "đặc" theo hình chữ nhật: với một tài liệu
@@ -499,12 +526,30 @@ def _filter_candidate_contours(
         # cao hơn rõ rệt - dấu hiệu contour không đáng tin, dù diện tích và
         # vị trí (không chạm cạnh) trông có vẻ hợp lệ.
         rect_area = cv2.contourArea(cv2.boxPoints(cv2.minAreaRect(contour)).astype(np.float32))
-        if rect_area > contour_area * 1.2:
+        is_rectangular = rect_area <= contour_area * rectangularity_ratio
+
+        # Loại bỏ contour chạm từ 3 cạnh ảnh trở lên - tài liệu thật luôn có
+        # lề nhìn thấy được ít nhất ở 2 phía đối diện; chạm gần hết các cạnh
+        # thường là nền/toàn khung hình bị dính vào vùng tách được.
+        x, y, w, h = cv2.boundingRect(contour)
+        touched_borders = sum([
+            x <= margin,
+            y <= margin,
+            x + w >= image_shape[1] - 1 - margin,
+            y + h >= image_shape[0] - 1 - margin,
+        ])
+
+        if contour_area > maximum_area or touched_borders >= 3:
+            if is_rectangular:
+                frame_filling_candidate_found = True
+            continue
+
+        if not is_rectangular:
             continue
 
         valid_contours.append(contour)
 
-    return valid_contours
+    return valid_contours, frame_filling_candidate_found
 
 
 def _grabcut_contours(
@@ -579,11 +624,25 @@ def _grabcut_contours(
 def _approximate_quad(contour: np.ndarray) -> np.ndarray | None:
     """Xấp xỉ contour thành đa giác lồi 4 điểm. Thử nhiều mức epsilon từ chặt
     đến lỏng vì viền giấy thực tế (bo tròn nhẹ, mờ, có bóng) thường không xẹp
-    gọn về đúng 4 góc ngay ở epsilon đầu tiên."""
+    gọn về đúng 4 góc ngay ở epsilon đầu tiên.
+
+    Với contour có phần khuyết ở giữa (ví dụ 2 vùng tài liệu nối bởi gáy
+    sách), approxPolyDP ép về đúng 4 điểm đôi khi vẫn ra một tứ giác lồi
+    "hợp lệ" về mặt hình học nhưng lại là một hình cánh diều/thang méo cắt
+    chéo qua phần khuyết đó, thay vì đi qua đúng 4 góc thật - diện tích có
+    thể vẫn gần đúng dù các điểm hoàn toàn sai vị trí. Vì vậy chỉ nhận một
+    xấp xỉ nếu bản thân nó cũng đủ "đặc hình chữ nhật" (minAreaRect của
+    chính 4 điểm đó gần khớp diện tích của chúng) - một tứ giác lồi bị méo
+    thành cánh diều sẽ có minAreaRect phình to rõ rệt so với diện tích thật
+    của nó, giống hệt dấu hiệu dùng để lọc contour nhiễu ở nơi khác."""
     perimeter = cv2.arcLength(contour, True)
     for epsilon_ratio in (0.01, 0.02, 0.03, 0.04, 0.05, 0.08):
         approximation = cv2.approxPolyDP(contour, epsilon_ratio * perimeter, True)
-        if len(approximation) == 4 and cv2.isContourConvex(approximation):
+        if len(approximation) != 4 or not cv2.isContourConvex(approximation):
+            continue
+        quad_area = cv2.contourArea(approximation)
+        rect_area = cv2.contourArea(cv2.boxPoints(cv2.minAreaRect(approximation)).astype(np.float32))
+        if quad_area > 0 and rect_area <= quad_area * 1.2:
             return approximation.reshape(4, 2).astype(np.float32)
     return None
 
@@ -745,15 +804,18 @@ def find_document_corners(
 
     contours, _, scale = prepared
 
-    quad = None
-    for contour in contours:
-        candidate = _approximate_quad(contour)
-        if candidate is not None:
-            quad = candidate / scale
-            break
-
-    if quad is None:
-        largest_contour = contours[0]
+    # Luôn bám theo contour lớn nhất (đã qua lọc diện tích/chạm cạnh/độ đặc
+    # ở _filter_candidate_contours) thay vì dò tiếp các contour nhỏ hơn khi
+    # nó không xấp xỉ gọn thành tứ giác - contour lớn nhất là ứng viên đúng
+    # nhất cho toàn bộ tài liệu (ví dụ bìa màu + trang trắng của cùng một
+    # cuốn sổ); một contour nhỏ hơn dù xấp xỉ "sạch" hơn (như chỉ vùng viền
+    # bảng trên 1 trang) vẫn chỉ là một phần của tài liệu thật, dùng nó sẽ
+    # crop hụt mất phần còn lại.
+    largest_contour = contours[0]
+    candidate = _approximate_quad(largest_contour)
+    if candidate is not None:
+        quad = candidate / scale
+    else:
         box = cv2.boxPoints(cv2.minAreaRect(largest_contour))
         quad = box.astype(np.float32) / scale
 
