@@ -1,6 +1,8 @@
 import threading
 from pathlib import Path
 
+import cv2
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -241,3 +243,174 @@ def test_scan_pdf_debug_returns_per_page_overlay() -> None:
     assert page_1.status_code == 200
     assert page_2.status_code == 200
     assert page_3.status_code == 404
+
+
+def _encode_document_photo_jpeg(hand_covering: bool = False) -> bytes:
+    """Ảnh tài liệu tổng hợp (nền xám, giấy sáng màu với vài dòng chữ giả)
+    dùng cho test /api/capture/check, tránh phụ thuộc file fixture thật."""
+    width, height = 1600, 1200
+    image = np.full((height, width, 3), (90, 90, 90), dtype=np.uint8)
+    x0, y0 = int(width * 0.15), int(height * 0.12)
+    x1, y1 = int(width * 0.85), int(height * 0.88)
+    cv2.rectangle(image, (x0, y0), (x1, y1), (235, 235, 235), -1)
+    for i in range(20):
+        y = y0 + 40 + i * 28
+        if y > y1 - 20:
+            break
+        cv2.line(image, (x0 + 40, y), (x0 + 300, y), (20, 20, 20), 2)
+    if hand_covering:
+        cv2.ellipse(
+            image, (int(width * 0.75), int(height * 0.5)), (180, 350), 20, 0, 360,
+            (120, 170, 230), -1,
+        )
+    ok, buffer = cv2.imencode(".jpg", image)
+    assert ok
+    return buffer.tobytes()
+
+
+def test_capture_check_accepts_good_photo() -> None:
+    response = client.post(
+        "/api/capture/check",
+        files={"file": ("capture.jpg", _encode_document_photo_jpeg(), "image/jpeg")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["passed"] is True
+    assert body["issues"] == []
+
+
+def test_capture_check_rejects_hand_covering_document() -> None:
+    response = client.post(
+        "/api/capture/check",
+        files={
+            "file": (
+                "capture.jpg",
+                _encode_document_photo_jpeg(hand_covering=True),
+                "image/jpeg",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["passed"] is False
+    assert any(issue["code"] == "hand_covering" for issue in body["issues"])
+    assert any("tay" in issue["message"] for issue in body["issues"])
+
+
+def test_capture_check_rejects_invalid_file_without_failing_request() -> None:
+    response = client.post(
+        "/api/capture/check",
+        files={"file": ("capture.jpg", b"not an image", "image/jpeg")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["passed"] is False
+    assert body["issues"][0]["code"] == "invalid_file"
+
+
+def test_capture_check_returns_503_when_concurrency_limit_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_module, "_JOB_SEMAPHORE", threading.Semaphore(0))
+    monkeypatch.setattr(api_module, "QUEUE_TIMEOUT_SECONDS", 0.05)
+
+    response = client.post(
+        "/api/capture/check",
+        files={"file": ("capture.jpg", b"irrelevant", "image/jpeg")},
+    )
+
+    assert response.status_code == 503
+    assert "Retry-After" in response.headers
+
+
+def test_capture_check_does_not_affect_regular_upload_scan() -> None:
+    # QC chặn cứng chỉ áp dụng cho luồng chụp ảnh (/api/capture/check) -
+    # upload thường qua /api/scan vẫn xử lý và chỉ cảnh báo như cũ, kể cả
+    # với ảnh có tay che.
+    response = client.post(
+        "/api/scan",
+        files={
+            "file": (
+                "hand.jpg",
+                _encode_document_photo_jpeg(hand_covering=True),
+                "image/jpeg",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] in ("success", "warning")
+    assert body["download_url"] is not None
+
+
+def test_capture_scan_processes_good_photo_in_one_call() -> None:
+    # /api/capture/scan gộp QC + crop trong một lượt upload - ảnh đạt QC
+    # phải trả về passed=True kèm luôn kết quả xử lý (scan), không cần gọi
+    # thêm /api/scan riêng.
+    response = client.post(
+        "/api/capture/scan",
+        files={"file": ("capture.jpg", _encode_document_photo_jpeg(), "image/jpeg")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["passed"] is True
+    assert body["issues"] == []
+    assert body["scan"] is not None
+    assert body["scan"]["status"] in ("success", "warning")
+    assert body["scan"]["download_url"] is not None
+
+    download = client.get(body["scan"]["download_url"])
+    assert download.status_code == 200
+    assert len(download.content) > 0
+
+
+def test_capture_scan_rejects_hand_covering_without_processing() -> None:
+    response = client.post(
+        "/api/capture/scan",
+        files={
+            "file": (
+                "capture.jpg",
+                _encode_document_photo_jpeg(hand_covering=True),
+                "image/jpeg",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["passed"] is False
+    assert body["scan"] is None
+    assert any(issue["code"] == "hand_covering" for issue in body["issues"])
+
+
+def test_capture_scan_rejects_invalid_file_without_failing_request() -> None:
+    response = client.post(
+        "/api/capture/scan",
+        files={"file": ("capture.jpg", b"not an image", "image/jpeg")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["passed"] is False
+    assert body["scan"] is None
+    assert body["issues"][0]["code"] == "invalid_file"
+
+
+def test_capture_scan_returns_503_when_concurrency_limit_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_module, "_JOB_SEMAPHORE", threading.Semaphore(0))
+    monkeypatch.setattr(api_module, "QUEUE_TIMEOUT_SECONDS", 0.05)
+
+    response = client.post(
+        "/api/capture/scan",
+        files={"file": ("capture.jpg", b"irrelevant", "image/jpeg")},
+    )
+
+    assert response.status_code == 503
+    assert "Retry-After" in response.headers

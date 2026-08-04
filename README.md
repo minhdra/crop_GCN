@@ -1,6 +1,8 @@
 # py-project
 
 Crop và làm rõ PDF / ảnh theo kiểu scanner. Có sẵn CLI, FastAPI và Docker Compose.
+Giao diện web (`/`) hỗ trợ cả upload file lẫn chụp ảnh trực tiếp từ camera
+(điện thoại/laptop) - xem [Chụp ảnh trực tiếp và QC](#chụp-ảnh-trực-tiếp-và-qc-camera).
 
 Nếu không tìm thấy đủ bốn góc tài liệu, chương trình giữ nguyên toàn trang/ảnh
 và vẫn làm rõ nội dung. Các tham số xử lý: `mode` (`color`/`scan`/`bw`),
@@ -24,6 +26,90 @@ vẽ lên ảnh gốc (trước crop): contour vùng giấy tìm được (viề
 góc đã chọn để crop nếu có (viền xanh lá + chấm đỏ ở góc), và các chỉ số
 `blur_score`/`solidity` dạng chữ ở góc trên trái. Dùng để soi vì sao một
 ảnh/trang không crop được hoặc bị gắn cờ mờ/nát.
+
+## Chụp ảnh trực tiếp và QC (camera)
+
+Ngoài upload file, giao diện web (`/`) có nút **"Chụp ảnh (điện thoại/laptop)"**
+mở camera của thiết bị (`getUserMedia` - cần chạy qua HTTPS hoặc `localhost`,
+trình duyệt sẽ không cho mở camera trên HTTP thường) để chụp trực tiếp một
+tài liệu, có thể đổi camera trước/sau trên điện thoại.
+
+Khác với upload (chỉ cảnh báo mờ/nát qua `warnings` như trên, vẫn cho xử
+lý), ảnh vừa chụp được **QC chặn cứng**, và nếu đạt thì **crop luôn ngay lập
+tức** - không cần bấm "Xử lý" thêm: gọi `POST /api/capture/scan` ngay sau
+khi chụp, một lượt upload duy nhất vừa QC vừa crop (nếu đạt), trả kết quả đã
+crop luôn trong cùng response. Không đạt QC thì bị từ chối hoàn toàn kèm lý
+do cụ thể, bắt người dùng chụp lại, chưa xử lý crop.
+
+Endpoint gộp một lượt thay vì gọi QC riêng rồi lại upload lần nữa để xử lý -
+tránh tốn gấp đôi băng thông và chạy lại bước tốn nhất (GrabCut) hai lần
+trên cùng một ảnh, vốn là nguyên nhân chính khiến việc chụp ảnh cảm giác
+chậm khi test qua mạng di động.
+
+```bash
+curl -X POST http://127.0.0.1:8090/api/capture/scan \
+  -F "file=@capture.jpg" -F "mode=scan"
+```
+
+Không đạt QC (`scan` là `null`, chưa xử lý gì):
+
+```json
+{
+  "passed": false,
+  "issues": [
+    {
+      "code": "hand_covering",
+      "message": "Phát hiện tay che một phần tài liệu. Vui lòng bỏ tay ra khỏi vùng tài liệu rồi chụp lại."
+    }
+  ],
+  "scan": null
+}
+```
+
+Đạt QC - `scan` chứa kết quả xử lý y hệt `/api/scan` (`download_url`,
+`view_url`, `warnings`...):
+
+```json
+{
+  "passed": true,
+  "issues": [],
+  "scan": {
+    "filename": "capture.jpg",
+    "status": "success",
+    "download_url": "/api/download/<job_id>",
+    "view_url": "/api/view/<job_id>",
+    "cropped": true
+  }
+}
+```
+
+Vẫn còn endpoint `POST /api/capture/check` (chỉ QC, không xử lý crop) cho
+trường hợp cần kiểm tra chất lượng ảnh mà chưa muốn xử lý ngay.
+
+Các tiêu chí đang chặn (mỗi tiêu chí độc lập, có thể bổ sung thêm sau):
+
+| `code` | Khi nào |
+| --- | --- |
+| `no_document_detected` | Không nhận diện được viền tài liệu rõ ràng trong khung hình (nền quá nhiễu, góc chụp không phù hợp, thiếu sáng...). |
+| `low_resolution` | Cạnh dài của ảnh nhỏ hơn `min_resolution` (mặc định `500` px) - không đủ để đọc chữ. |
+| `blurry` | Ảnh mờ (cùng phép đo `blur_score` như cảnh báo ở trên), theo `blur_threshold`. |
+| `hand_covering` | Vùng màu da tay che quá `skin_coverage_threshold` (mặc định `10%`) diện tích tài liệu. |
+| `cluttered_background` | Mật độ biên (edge) ở nền quanh tài liệu vượt `clutter_edge_ratio_threshold` (mặc định `20%`) - nền quá nhiều vật/chi tiết gây nhiễu. Nền gạch/đá hoa nhiều vân vẫn qua được ở mức này (đo thực tế ~13-14%); chỉ chặn nền thực sự rất rối. |
+
+Đây đều là heuristic OpenCV (màu da theo YCrCb, mật độ biên Canny...), xấp xỉ
+như `blur_threshold`/`solidity_threshold` ở trên - có thể cần tinh chỉnh
+ngưỡng theo dữ liệu thực tế, và **chỉ áp dụng cho luồng chụp ảnh trực tiếp**,
+không ảnh hưởng hành vi upload file hiện có.
+
+**Chưa có tiêu chí "chỉ là tài liệu" (nghi chụp lại từ màn hình thiết bị
+khác):** đã thử hai hướng heuristic phổ biến (đỉnh phổ tần số FFT trên ảnh
+xám, và lệch màu giữa các kênh RGB kiểu chroma) nhưng cả hai đều không đủ tin
+cậy để chặn cứng - hướng đầu nhận nhầm giấy kẻ ô ly/bảng biểu (tài liệu thật
+rất phổ biến) thành chụp màn hình; hướng sau chính xác hơn nhưng tín hiệu gần
+như bị nén JPEG (chroma subsampling) xóa sạch, trong khi ảnh chụp từ camera
+trình duyệt luôn được nén JPEG trước khi gửi lên. Để bổ sung tiêu chí này sau
+cần tập ảnh mẫu chụp màn hình thật để hiệu chỉnh thay vì đoán ngưỡng trên ảnh
+tổng hợp.
 
 ## API (FastAPI)
 

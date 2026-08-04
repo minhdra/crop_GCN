@@ -39,3 +39,30 @@ class BatchScanResult(BaseModel):
     """Kết quả xử lý một danh sách file."""
 
     results: list[ScanResult]
+
+
+class CaptureIssueModel(BaseModel):
+    """Một lý do cụ thể khiến ảnh chụp trực tiếp từ camera bị từ chối."""
+
+    code: str
+    message: str
+
+
+class CaptureQualityCheckResult(BaseModel):
+    """Kết quả QC ảnh chụp trực tiếp từ camera (luồng chụp ảnh, không áp
+    dụng cho file upload). `passed=False` nghĩa là ảnh bị chặn - frontend
+    phải yêu cầu người dùng chụp lại thay vì gửi đi xử lý crop."""
+
+    passed: bool
+    issues: list[CaptureIssueModel] = []
+
+
+class CaptureScanResult(BaseModel):
+    """Kết quả QC + xử lý crop gộp trong một lần gọi cho ảnh chụp trực tiếp
+    từ camera - chỉ tốn một lượt upload thay vì gọi QC rồi lại upload lần
+    nữa để xử lý. `passed=False` nghĩa là ảnh bị chặn ở bước QC, `scan` là
+    None; `passed=True` thì `scan` chứa kết quả xử lý như /api/scan."""
+
+    passed: bool
+    issues: list[CaptureIssueModel] = []
+    scan: ScanResult | None = None

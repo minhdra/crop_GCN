@@ -34,10 +34,18 @@ from py_project.document_scanner import (
     DEFAULT_BLUR_THRESHOLD,
     DEFAULT_SOLIDITY_THRESHOLD,
     QualityIssues,
+    assess_capture_quality,
+    load_image_with_exif,
     scan_image,
     scan_pdf,
 )
-from py_project.schemas import BatchScanResult, ScanResult
+from py_project.schemas import (
+    BatchScanResult,
+    CaptureIssueModel,
+    CaptureQualityCheckResult,
+    CaptureScanResult,
+    ScanResult,
+)
 
 # Nạp file .env ở thư mục làm việc hiện tại (nếu có) - chỉ điền các biến
 # CHƯA được set sẵn trong môi trường, không ghi đè biến đã export/đã đặt
@@ -470,6 +478,214 @@ def _process_one(
     finally:
         _JOB_SEMAPHORE.release()
         upload.file.close()
+
+
+def _check_capture_quality(upload: UploadFile, min_area_ratio: float) -> CaptureQualityCheckResult:
+    """Kiểm tra chất lượng một ảnh vừa chụp trực tiếp từ camera (không xử lý
+    crop, không lưu kết quả) - dùng riêng cho luồng chụp ảnh, tách biệt khỏi
+    /api/scan để không ảnh hưởng hành vi upload file hiện có (upload vẫn chỉ
+    cảnh báo qua `warnings`, không bị chặn). `passed=False` kèm lý do cụ thể
+    trong `issues` nếu ảnh không đạt, để frontend yêu cầu chụp lại."""
+    original_name = upload.filename or "capture.jpg"
+
+    # QC vẫn chạy _paper_contours (GrabCut) như /api/scan nên tốn CPU tương
+    # đương - dùng chung semaphore/hàng đợi để không vượt quá năng lực xử lý
+    # đồng thời của server.
+    if not _JOB_SEMAPHORE.acquire(timeout=QUEUE_TIMEOUT_SECONDS):
+        upload.file.close()
+        raise HTTPException(
+            status_code=503,
+            detail="Server đang xử lý quá nhiều yêu cầu, vui lòng thử lại sau.",
+            headers={"Retry-After": str(int(QUEUE_TIMEOUT_SECONDS))},
+        )
+
+    try:
+        with tempfile.TemporaryDirectory(dir=STORAGE_DIR) as tmp_dir:
+            # Tên file tạm không phụ thuộc đuôi file upload gửi lên - ảnh
+            # chụp từ canvas trình duyệt luôn là nội dung JPEG/PNG thật,
+            # PIL tự nhận dạng định dạng theo nội dung, không theo đuôi file.
+            input_path = Path(tmp_dir) / "capture.jpg"
+            try:
+                _copy_upload_with_size_limit(upload, input_path)
+                image = load_image_with_exif(input_path)
+            except (ValueError, OSError) as error:
+                message = str(error).replace(str(input_path), original_name)
+                return CaptureQualityCheckResult(
+                    passed=False,
+                    issues=[
+                        CaptureIssueModel(
+                            code="invalid_file",
+                            message=message or "Không đọc được ảnh, vui lòng chụp lại.",
+                        )
+                    ],
+                )
+
+            result = assess_capture_quality(image, min_area_ratio=min_area_ratio)
+            return CaptureQualityCheckResult(
+                passed=result.passed,
+                issues=[
+                    CaptureIssueModel(code=issue.code, message=issue.message)
+                    for issue in result.issues
+                ],
+            )
+    finally:
+        _JOB_SEMAPHORE.release()
+        upload.file.close()
+
+
+@app.post("/api/capture/check", response_model=CaptureQualityCheckResult)
+def check_capture_quality(
+    file: Annotated[UploadFile, File(description="Ảnh vừa chụp trực tiếp từ camera cần kiểm tra chất lượng")],
+    min_area_ratio: MinAreaRatioParam = 0.2,
+) -> CaptureQualityCheckResult:
+    """QC ảnh chụp trực tiếp từ camera - KHÔNG áp dụng cho file upload
+    thường qua /api/scan. Kiểm tra tài liệu có nhận diện được trong khung
+    hình, độ phân giải/độ mờ, tay che tài liệu, và nền quá nhiễu.
+
+    Nếu `passed` là False, ảnh bị chặn hoàn toàn (chưa xử lý crop) - gọi lại
+    endpoint này sau khi người dùng chụp lại, chỉ gọi /api/scan khi
+    `passed=True`.
+    """
+    return _check_capture_quality(upload=file, min_area_ratio=min_area_ratio)
+
+
+def _check_and_process_capture(
+    upload: UploadFile,
+    mode: str,
+    rotate: int,
+    sharpness: float,
+    min_area_ratio: float,
+    crop: bool,
+    blur_threshold: float,
+    solidity_threshold: float,
+    debug: bool,
+) -> CaptureScanResult:
+    """QC + xử lý crop gộp trong MỘT lượt upload duy nhất cho ảnh chụp trực
+    tiếp từ camera - so với gọi /api/capture/check rồi lại /api/scan riêng,
+    cách này khỏi phải upload lại cùng một ảnh lần hai (thường vài MB, rất
+    chậm trên mạng di động) và khỏi chạy lại GrabCut (bước tốn nhất) lần thứ
+    hai trên cùng ảnh, tái dùng luôn `prepared` đã tính lúc QC. KHÔNG áp dụng
+    cho file upload thường (vẫn qua /api/scan như cũ)."""
+    original_name = upload.filename or "capture.jpg"
+    job_id = uuid.uuid4().hex
+    job_dir = STORAGE_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    input_path = job_dir / "input.jpg"
+
+    if not _JOB_SEMAPHORE.acquire(timeout=QUEUE_TIMEOUT_SECONDS):
+        shutil.rmtree(job_dir, ignore_errors=True)
+        upload.file.close()
+        raise HTTPException(
+            status_code=503,
+            detail="Server đang xử lý quá nhiều yêu cầu, vui lòng thử lại sau.",
+            headers={"Retry-After": str(int(QUEUE_TIMEOUT_SECONDS))},
+        )
+
+    try:
+        try:
+            _copy_upload_with_size_limit(upload, input_path)
+            image = load_image_with_exif(input_path)
+        except (ValueError, OSError) as error:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            message = str(error).replace(str(input_path), original_name)
+            return CaptureScanResult(
+                passed=False,
+                issues=[
+                    CaptureIssueModel(
+                        code="invalid_file",
+                        message=message or "Không đọc được ảnh, vui lòng chụp lại.",
+                    )
+                ],
+            )
+
+        quality_result = assess_capture_quality(
+            image, min_area_ratio=min_area_ratio, blur_threshold=blur_threshold
+        )
+        if not quality_result.passed:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            return CaptureScanResult(
+                passed=False,
+                issues=[
+                    CaptureIssueModel(code=issue.code, message=issue.message)
+                    for issue in quality_result.issues
+                ],
+            )
+
+        output_path = job_dir / "output.jpg"
+        processing_started_at = time.perf_counter()
+        cropped, quality, debug_path = scan_image(
+            input_path=input_path,
+            output_path=output_path,
+            min_area_ratio=min_area_ratio,
+            mode=mode,
+            rotation=rotate,
+            sharpness=sharpness,
+            crop=crop,
+            blur_threshold=blur_threshold,
+            solidity_threshold=solidity_threshold,
+            debug=debug,
+            prepared=quality_result.prepared,
+        )
+        processing_time_seconds = time.perf_counter() - processing_started_at
+        warnings = _image_quality_warnings(quality)
+        persisted_path = _persist_output_copy(job_id, original_name, output_path)
+        scan_result = ScanResult(
+            filename=original_name,
+            status="warning" if warnings else "success",
+            warnings=warnings,
+            cropped=cropped,
+            is_blurry=quality.is_blurry,
+            is_damaged=quality.is_damaged,
+            download_url=f"/api/download/{job_id}",
+            view_url=f"/api/view/{job_id}",
+            saved_path=str(persisted_path),
+            debug_url=f"/api/debug/{job_id}" if debug_path is not None else None,
+            processing_time_seconds=processing_time_seconds,
+        )
+        return CaptureScanResult(passed=True, issues=[], scan=scan_result)
+    finally:
+        _JOB_SEMAPHORE.release()
+        upload.file.close()
+
+
+@app.post("/api/capture/scan", response_model=CaptureScanResult)
+def check_and_scan_capture(
+    file: Annotated[UploadFile, File(description="Ảnh vừa chụp trực tiếp từ camera cần QC rồi xử lý crop nếu đạt")],
+    mode: ModeParam = "color",
+    rotate: RotateParam = 0,
+    sharpness: SharpnessParam = 0.7,
+    min_area_ratio: MinAreaRatioParam = 0.2,
+    crop: Annotated[
+        bool,
+        Form(description="Có tự động phát hiện và crop viền giấy hay không. False = giữ nguyên khung ảnh gốc."),
+    ] = True,
+    blur_threshold: BlurThresholdParam = DEFAULT_BLUR_THRESHOLD,
+    solidity_threshold: SolidityThresholdParam = DEFAULT_SOLIDITY_THRESHOLD,
+    debug: Annotated[
+        bool,
+        Form(description="Nếu True và passed=True, sinh thêm ảnh debug (xem qua /api/debug/{job_id})."),
+    ] = False,
+) -> CaptureScanResult:
+    """QC ảnh chụp trực tiếp từ camera rồi xử lý crop NGAY nếu đạt - chỉ một
+    lượt upload, dùng cho luồng "chụp xong tự động cắt" trên giao diện web.
+    KHÔNG áp dụng cho file upload thường (vẫn dùng /api/scan như cũ).
+
+    `passed=False`: ảnh bị chặn ở QC, `scan` là null, `issues` chứa lý do cụ
+    thể để yêu cầu chụp lại. `passed=True`: `scan` chứa kết quả xử lý y hệt
+    /api/scan (download_url/view_url/warnings...).
+    """
+    _validate_rotate(rotate)
+    return _check_and_process_capture(
+        upload=file,
+        mode=mode,
+        rotate=rotate,
+        sharpness=sharpness,
+        min_area_ratio=min_area_ratio,
+        crop=crop,
+        blur_threshold=blur_threshold,
+        solidity_threshold=solidity_threshold,
+        debug=debug,
+    )
 
 
 @app.get("/health")

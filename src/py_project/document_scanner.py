@@ -594,6 +594,209 @@ def assess_quality(
     )
 
 
+# --- QC ảnh chụp trực tiếp từ camera (chặn cứng, yêu cầu chụp lại) ---------
+#
+# Khác với assess_quality (chỉ gắn cờ cảnh báo, vẫn cho xử lý), các heuristic
+# dưới đây dùng cho luồng chụp ảnh trực tiếp (không áp dụng cho file upload):
+# nếu vi phạm, ảnh bị chặn hoàn toàn và người dùng phải chụp lại. Đây vẫn là
+# các heuristic xấp xỉ (giống blur/solidity ở trên), có thể cần tinh chỉnh
+# ngưỡng theo dữ liệu thực tế.
+
+DEFAULT_MIN_CAPTURE_RESOLUTION = 500
+DEFAULT_SKIN_COVERAGE_THRESHOLD = 0.10
+DEFAULT_CLUTTER_EDGE_RATIO_THRESHOLD = 0.20
+
+# Không có tiêu chí "chỉ là tài liệu" (nghi chụp lại từ màn hình thiết bị
+# khác) ở đây: đã thử hai hướng heuristic phổ biến (đỉnh phổ tần số trên ảnh
+# xám, và lệch màu giữa các kênh RGB kiểu chroma) và cả hai đều không đủ tin
+# cậy để chặn cứng - hướng đầu nhận nhầm giấy kẻ ô ly/bảng biểu (rất phổ biến
+# với tài liệu thật) thành chụp màn hình với điểm số còn cao hơn cả trường
+# hợp mô phỏng chụp màn hình; hướng sau chính xác hơn trên ảnh gốc nhưng tín
+# hiệu gần như bị nén JPEG (chroma subsampling) xóa sạch - trong khi ảnh chụp
+# từ camera trình duyệt luôn được nén JPEG trước khi gửi lên. Để bổ sung tiêu
+# chí này sau, cần tập ảnh mẫu chụp màn hình thật để hiệu chỉnh thay vì đoán
+# ngưỡng trên ảnh tổng hợp.
+
+# Ngưỡng màu da trong không gian YCrCb - ổn định hơn RGB/HSV trước thay đổi
+# ánh sáng vì tách riêng độ chói (Y) khỏi thông tin màu (Cr, Cb).
+_SKIN_YCRCB_LOWER = np.array([0, 133, 77], dtype=np.uint8)
+_SKIN_YCRCB_UPPER = np.array([255, 173, 127], dtype=np.uint8)
+
+
+@dataclass
+class CaptureIssue:
+    """Một lý do cụ thể khiến ảnh chụp bị từ chối, kèm thông báo tiếng Việt
+    hiển thị trực tiếp cho người dùng để họ biết cách chụp lại cho đúng."""
+
+    code: str
+    message: str
+
+
+@dataclass
+class CaptureQualityResult:
+    """Kết quả QC một ảnh vừa chụp từ camera. `passed=False` nghĩa là ảnh bị
+    chặn, không xử lý crop - frontend phải yêu cầu người dùng chụp lại.
+
+    `prepared`: kết quả `_paper_contours` đã tính trong lúc QC - cho phép
+    caller (ví dụ endpoint gộp QC + crop) truyền lại cho `scan_image`/
+    `find_document_corners` khi `passed=True`, khỏi phải chạy lại GrabCut
+    (tốn nhất trong toàn bộ pipeline) lần thứ hai trên cùng một ảnh."""
+
+    passed: bool
+    issues: list[CaptureIssue] = field(default_factory=list)
+    scores: dict[str, float] = field(default_factory=dict)
+    prepared: tuple[list[np.ndarray], np.ndarray, float] | None = None
+
+
+def _skin_mask(image: np.ndarray) -> np.ndarray:
+    ycrcb = cv2.cvtColor(image, cv2.COLOR_BGR2YCrCb)
+    return cv2.inRange(ycrcb, _SKIN_YCRCB_LOWER, _SKIN_YCRCB_UPPER)
+
+
+def _skin_coverage_ratio(
+    resized: np.ndarray, document_contour: np.ndarray
+) -> float:
+    """Tỉ lệ diện tích vùng tài liệu bị che bởi vùng màu da tay - dùng để
+    phát hiện ngón tay/bàn tay đè lên tài liệu lúc chụp."""
+    mask = _skin_mask(resized)
+    document_mask = np.zeros(mask.shape, dtype=np.uint8)
+    cv2.drawContours(
+        document_mask, [document_contour.astype(np.int32)], -1, 255, thickness=cv2.FILLED
+    )
+    document_area = cv2.countNonZero(document_mask)
+    if document_area == 0:
+        return 0.0
+    skin_in_document = cv2.countNonZero(cv2.bitwise_and(mask, document_mask))
+    return skin_in_document / document_area
+
+
+def _background_clutter_ratio(
+    resized: np.ndarray, document_contour: np.ndarray
+) -> float:
+    """Mật độ biên (edge) ở phần nền quanh tài liệu (ngoài contour). Nền
+    phẳng/đơn sắc cho mật độ biên thấp; nền nhiều vật thể, hoa văn, hay lộn
+    xộn cho mật độ biên cao hẳn - dùng làm tín hiệu "quá nhiều thứ gây
+    nhiễu"."""
+    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    document_mask = np.zeros(edges.shape, dtype=np.uint8)
+    cv2.drawContours(
+        document_mask, [document_contour.astype(np.int32)], -1, 255, thickness=cv2.FILLED
+    )
+    background_mask = cv2.bitwise_not(document_mask)
+    background_area = cv2.countNonZero(background_mask)
+    if background_area == 0:
+        return 0.0
+    background_edges = cv2.countNonZero(cv2.bitwise_and(edges, background_mask))
+    return background_edges / background_area
+
+
+def assess_capture_quality(
+    image: np.ndarray,
+    min_area_ratio: float = 0.2,
+    blur_threshold: float = DEFAULT_BLUR_THRESHOLD,
+    min_resolution: int = DEFAULT_MIN_CAPTURE_RESOLUTION,
+    skin_coverage_threshold: float = DEFAULT_SKIN_COVERAGE_THRESHOLD,
+    clutter_edge_ratio_threshold: float = DEFAULT_CLUTTER_EDGE_RATIO_THRESHOLD,
+    prepared: tuple[list[np.ndarray], np.ndarray, float] | None = _PREPARED_NOT_COMPUTED,
+) -> CaptureQualityResult:
+    """QC ảnh vừa chụp trực tiếp từ camera trước khi xử lý crop. Kiểm tra
+    (mỗi mục có thể tự thêm/bớt sau này, không phụ thuộc lẫn nhau):
+        - Không nhận diện được tài liệu rõ ràng trong khung hình.
+        - Độ phân giải quá thấp hoặc ảnh bị mờ, không đọc được chữ.
+        - Tay che một phần tài liệu.
+        - Nền xung quanh quá nhiều thứ gây nhiễu.
+
+    `passed=False` nếu có bất kỳ vi phạm nào - frontend phải yêu cầu người
+    dùng chụp lại thay vì tiếp tục xử lý.
+
+    `prepared`: cho phép truyền lại kết quả `_paper_contours` đã tính sẵn (ví
+    dụ khi gọi liền sau đó để crop luôn ảnh đạt QC) để khỏi chạy lại GrabCut
+    - xem ghi chú ở `find_document_corners`."""
+    issues: list[CaptureIssue] = []
+    scores: dict[str, float] = {}
+
+    height, width = image.shape[:2]
+    long_side = max(height, width)
+    scores["resolution_px"] = float(long_side)
+    if long_side < min_resolution:
+        issues.append(
+            CaptureIssue(
+                code="low_resolution",
+                message=(
+                    "Độ phân giải ảnh quá thấp, không nhìn rõ chữ. "
+                    "Vui lòng lại gần hơn hoặc chụp lại ở độ phân giải cao hơn."
+                ),
+            )
+        )
+
+    if prepared is _PREPARED_NOT_COMPUTED:
+        prepared = _paper_contours(image, min_area_ratio)
+    quality = assess_quality(
+        image=image,
+        min_area_ratio=min_area_ratio,
+        blur_threshold=blur_threshold,
+        prepared=prepared,
+    )
+    scores["blur_score"] = quality.blur_score
+    if quality.is_blurry:
+        issues.append(
+            CaptureIssue(
+                code="blurry",
+                message=(
+                    "Ảnh bị mờ, không đọc được chữ. "
+                    "Vui lòng giữ máy chụp ổn định, đủ sáng rồi chụp lại."
+                ),
+            )
+        )
+
+    if prepared is None:
+        issues.append(
+            CaptureIssue(
+                code="no_document_detected",
+                message=(
+                    "Không nhận diện được tài liệu rõ ràng trong khung hình. "
+                    "Vui lòng đặt tài liệu trên nền phẳng, đơn sắc, đủ ánh sáng, "
+                    "chụp thẳng góc và lấy trọn tài liệu vào khung hình rồi chụp lại."
+                ),
+            )
+        )
+    else:
+        contours, resized, _scale = prepared
+        document_contour = next(
+            (contour for contour in contours if _approximate_quad(contour) is not None),
+            contours[0],
+        )
+
+        skin_ratio = _skin_coverage_ratio(resized, document_contour)
+        scores["skin_coverage_ratio"] = skin_ratio
+        if skin_ratio > skin_coverage_threshold:
+            issues.append(
+                CaptureIssue(
+                    code="hand_covering",
+                    message=(
+                        "Phát hiện tay che một phần tài liệu. "
+                        "Vui lòng bỏ tay ra khỏi vùng tài liệu rồi chụp lại."
+                    ),
+                )
+            )
+
+        clutter_ratio = _background_clutter_ratio(resized, document_contour)
+        scores["background_clutter_ratio"] = clutter_ratio
+        if clutter_ratio > clutter_edge_ratio_threshold:
+            issues.append(
+                CaptureIssue(
+                    code="cluttered_background",
+                    message=(
+                        "Nền xung quanh có quá nhiều vật/chi tiết gây nhiễu. "
+                        "Vui lòng đặt tài liệu lên nền phẳng, đơn sắc rồi chụp lại."
+                    ),
+                )
+            )
+
+    return CaptureQualityResult(passed=not issues, issues=issues, scores=scores, prepared=prepared)
+
+
 def generate_debug_image(
     image: np.ndarray,
     min_area_ratio: float,
@@ -747,12 +950,17 @@ def scan_image(
     blur_threshold: float = DEFAULT_BLUR_THRESHOLD,
     solidity_threshold: float = DEFAULT_SOLIDITY_THRESHOLD,
     debug: bool = False,
+    prepared: tuple[list[np.ndarray], np.ndarray, float] | None = _PREPARED_NOT_COMPUTED,
 ) -> tuple[bool, QualityIssues, Path | None]:
     """Xử lý và lưu một ảnh đầu vào.
 
     Trả về True nếu đã tìm thấy viền và crop, đánh giá chất lượng (mờ / nghi
     bị nát) của ảnh gốc, và đường dẫn ảnh debug (contour + góc crop) nếu
     debug=True, ngược lại None.
+
+    `prepared`: cho phép truyền lại kết quả `_paper_contours` đã tính sẵn từ
+    bên ngoài (ví dụ đã chạy QC ảnh chụp camera ngay trước đó trên cùng
+    ảnh) để khỏi chạy lại GrabCut - xem ghi chú ở `find_document_corners`.
     """
     # Sử dụng load_image_with_exif thay vì cv2.imread
     image = load_image_with_exif(input_path)
@@ -761,7 +969,8 @@ def scan_image(
     # Tính một lần, dùng lại cho assess_quality/find_document_corners/
     # generate_debug_image - bước này giờ chạy cả GrabCut nên khá tốn
     # (hàng trăm ms), gọi lặp lại 2-3 lần cho cùng một ảnh sẽ rất lãng phí.
-    prepared = _paper_contours(original_image, min_area_ratio)
+    if prepared is _PREPARED_NOT_COMPUTED:
+        prepared = _paper_contours(original_image, min_area_ratio)
 
     # Đánh giá chất lượng trên ảnh gốc, trước khi crop làm mất tín hiệu viền rách.
     quality = assess_quality(

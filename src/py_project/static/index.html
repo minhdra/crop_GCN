@@ -295,6 +295,192 @@
       font-size: 0.9rem;
       color: #777;
     }
+
+    .capture-row {
+      display: flex;
+      justify-content: center;
+      margin: 0.75rem 0 0;
+    }
+
+    button#open-camera {
+      padding: 0.55rem 1.1rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: inherit;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+
+    .camera-modal-box {
+      background: #000;
+      color: #eaeaea;
+      width: 100vw;
+      /* 100vh trên Safari di động tính cả phần bị thanh địa chỉ/thanh công
+         cụ che mất, đẩy nút cuối cùng ra ngoài màn hình thực tế nhìn thấy
+         được ("mất nút"). 100dvh (dynamic viewport height, hỗ trợ từ iOS
+         15.4+) tự trừ phần đó - vẫn giữ 100vh làm fallback cho trình duyệt
+         cũ hơn. */
+      height: 100vh;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .camera-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.6rem 1rem;
+      padding-top: max(0.6rem, env(safe-area-inset-top));
+      border-bottom: 1px solid #333;
+      font-size: 0.95rem;
+      flex-shrink: 0;
+    }
+
+    .camera-header button {
+      border: none;
+      background: none;
+      font-size: 1.4rem;
+      cursor: pointer;
+      color: inherit;
+      line-height: 1;
+    }
+
+    .camera-body {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      background: #000;
+    }
+
+    #camera-live-view,
+    #camera-preview-view,
+    #camera-result-view {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+
+    /* [hidden] chỉ thắng khi KHÔNG có rule display khác cùng cấp độ ưu
+       tiên (origin) đè lên - author CSS "display: flex" ở trên sẽ thắng
+       UA stylesheet "[hidden]{display:none}" nếu thiếu override tường
+       minh này (đã gặp đúng lỗi này với .camera-controls ở trên). */
+    #camera-live-view[hidden],
+    #camera-preview-view[hidden],
+    #camera-result-view[hidden] {
+      display: none;
+    }
+
+    .camera-body video,
+    .camera-body img {
+      max-width: 100%;
+      max-height: 100%;
+      min-height: 0;
+      object-fit: contain;
+    }
+
+    .camera-status {
+      position: absolute;
+      top: 0.5rem;
+      left: 0;
+      right: 0;
+      text-align: center;
+      font-size: 0.85rem;
+      color: #ddd;
+      pointer-events: none;
+    }
+
+    .camera-issues {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--error-bg);
+      color: var(--error);
+      padding: 0.75rem 1rem;
+      font-size: 0.88rem;
+      max-height: 45%;
+      overflow-y: auto;
+    }
+
+    .camera-issues ul {
+      margin: 0.35rem 0 0;
+      padding-left: 1.2rem;
+    }
+
+    .camera-controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 0.75rem 1rem;
+      padding: 0.85rem 1rem;
+      /* Chừa khoảng cho vùng home-indicator/bo góc màn hình ở cuối iPhone
+         không có nút Home - nếu không nút cuối dễ bị che/khó bấm chuẩn. */
+      padding-bottom: max(0.85rem, env(safe-area-inset-bottom));
+      flex-shrink: 0;
+    }
+
+    .camera-controls[hidden] {
+      display: none;
+    }
+
+    .camera-controls button,
+    .camera-controls a {
+      padding: 0.65rem 1.1rem;
+      border-radius: 8px;
+      border: 1px solid #555;
+      background: #1c1c1c;
+      color: #eaeaea;
+      font-size: 0.9rem;
+      cursor: pointer;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .camera-controls button#camera-capture {
+      background: #3b82f6;
+      border-color: #3b82f6;
+      color: white;
+      font-weight: 600;
+    }
+
+    .camera-controls button#camera-use,
+    .camera-controls button#camera-result-done {
+      background: #1a7f37;
+      border-color: #1a7f37;
+      color: white;
+      font-weight: 600;
+    }
+
+    .camera-controls a#camera-result-download {
+      background: #3b82f6;
+      border-color: #3b82f6;
+      color: white;
+      font-weight: 600;
+    }
+
+    .camera-controls button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .camera-result-status {
+      margin-top: 0.6rem;
+      text-align: center;
+      font-size: 0.85rem;
+      color: #ddd;
+    }
   </style>
 </head>
 
@@ -307,6 +493,10 @@
     <input type="file" id="file-input" multiple accept=".pdf,.jpg,.jpeg,.png,.bmp,.tiff,.webp,.heic" />
   </div>
 
+  <div class="capture-row">
+    <button id="open-camera" type="button">📷 Chụp ảnh (điện thoại/laptop)</button>
+  </div>
+
   <ul id="file-list"></ul>
   <button id="clear-files" type="button" hidden>Bỏ tất cả</button>
 
@@ -314,8 +504,8 @@
     <label>
       Mode
       <select id="opt-mode">
-        <option value="scan" selected>scan (ảnh xám)</option>
-        <option value="color">color (giữ màu)</option>
+        <option value="scan">scan (ảnh xám)</option>
+        <option value="color" selected>color (giữ màu)</option>
         <option value="bw">bw (đen trắng)</option>
       </select>
     </label>
@@ -376,6 +566,43 @@
       </div>
     </div>
   </div>
+
+  <div class="modal-overlay" id="camera-modal" hidden>
+    <div class="camera-modal-box">
+      <div class="camera-header">
+        <span>Chụp ảnh tài liệu</span>
+        <button id="camera-close" type="button">✕</button>
+      </div>
+      <div class="camera-body">
+        <div id="camera-live-view">
+          <video id="camera-video" autoplay playsinline muted></video>
+        </div>
+        <div id="camera-preview-view" hidden>
+          <img id="camera-preview-img" alt="Ảnh vừa chụp" />
+        </div>
+        <div id="camera-result-view" hidden>
+          <img id="camera-result-img" alt="Ảnh đã crop" />
+          <div class="camera-result-status" id="camera-result-status"></div>
+        </div>
+        <div class="camera-status" id="camera-status"></div>
+        <div class="camera-issues" id="camera-issues" hidden></div>
+      </div>
+      <div class="camera-controls" id="camera-live-controls">
+        <button id="camera-switch" type="button">🔄 Đổi camera</button>
+        <button id="camera-capture" type="button">⬤ Chụp</button>
+      </div>
+      <div class="camera-controls" id="camera-preview-controls" hidden>
+        <button id="camera-retake" type="button">↩ Chụp lại</button>
+        <button id="camera-use" type="button">✓ Dùng ảnh này</button>
+      </div>
+      <div class="camera-controls" id="camera-result-controls" hidden>
+        <button id="camera-result-retake" type="button">📷 Chụp ảnh khác</button>
+        <a id="camera-result-download" class="camera-download-link" download>⬇ Tải xuống</a>
+        <button id="camera-result-done" type="button">✓ Xong</button>
+      </div>
+    </div>
+  </div>
+  <canvas id="camera-canvas" hidden></canvas>
 
   <script>
     const dropzone = document.getElementById("dropzone");
@@ -444,6 +671,247 @@
     {
       selectedFiles = [];
       renderFileList();
+    });
+
+    // --- Chụp ảnh từ camera (mobile/laptop) ---------------------------
+    //
+    // Luồng: mở camera -> chụp -> gửi ảnh sang /api/capture/scan (QC dính
+    // tay/mờ/nền nhiễu/không thấy tài liệu, rồi crop LUÔN nếu đạt - gộp
+    // vào một lượt upload duy nhất thay vì gọi 2 endpoint riêng, đỡ chậm
+    // trên mạng di động). Không đạt QC thì hiển thị lý do và bắt chụp lại.
+    // Đạt thì hiện luôn ảnh đã crop trong modal, không cần thao tác thêm.
+    const openCameraBtn = document.getElementById("open-camera");
+    const cameraModal = document.getElementById("camera-modal");
+    const cameraCloseBtn = document.getElementById("camera-close");
+    const cameraVideo = document.getElementById("camera-video");
+    const cameraCanvas = document.getElementById("camera-canvas");
+    const cameraLiveView = document.getElementById("camera-live-view");
+    const cameraPreviewView = document.getElementById("camera-preview-view");
+    const cameraPreviewImg = document.getElementById("camera-preview-img");
+    const cameraResultView = document.getElementById("camera-result-view");
+    const cameraResultImg = document.getElementById("camera-result-img");
+    const cameraResultStatusEl = document.getElementById("camera-result-status");
+    const cameraLiveControls = document.getElementById("camera-live-controls");
+    const cameraPreviewControls = document.getElementById("camera-preview-controls");
+    const cameraResultControls = document.getElementById("camera-result-controls");
+    const cameraSwitchBtn = document.getElementById("camera-switch");
+    const cameraCaptureBtn = document.getElementById("camera-capture");
+    const cameraRetakeBtn = document.getElementById("camera-retake");
+    const cameraUseBtn = document.getElementById("camera-use");
+    const cameraResultRetakeBtn = document.getElementById("camera-result-retake");
+    const cameraResultDownloadLink = document.getElementById("camera-result-download");
+    const cameraResultDoneBtn = document.getElementById("camera-result-done");
+    const cameraStatusEl = document.getElementById("camera-status");
+    const cameraIssuesEl = document.getElementById("camera-issues");
+
+    // Không set openCameraBtn.disabled khi thiếu hỗ trợ: nút bị disable im
+    // lặng khiến người dùng bấm không thấy phản hồi gì (đặc biệt trên mobile,
+    // không có hover để thấy title) - dễ tưởng nhầm là nút bị lỗi/không hoạt
+    // động. Thay vào đó vẫn cho bấm, mở modal và hiện rõ lý do cụ thể.
+    function cameraUnsupportedReason()
+    {
+      if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+        return window.isSecureContext
+          ? "Trình duyệt này không hỗ trợ mở camera."
+          : "Cần truy cập qua HTTPS (hoặc localhost) để mở camera - kết nối hiện tại không an toàn.";
+      }
+      return null;
+    }
+
+    let cameraStream = null;
+    let cameraFacingMode = "environment";
+    let capturedBlob = null;
+
+    function stopCameraStream()
+    {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach((track) => track.stop());
+        cameraStream = null;
+      }
+    }
+
+    async function startCameraStream(facingMode)
+    {
+      stopCameraStream();
+      cameraStatusEl.textContent = "Đang mở camera...";
+      try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+          // Không ràng buộc "min" cho width/height - máy không đáp ứng nổi
+          // sẽ khiến getUserMedia thất bại hẳn thay vì tự hạ xuống mức thấp
+          // hơn. "ideal" để trình duyệt cố gắng đạt tới nhưng vẫn tự chọn
+          // mức khác nếu camera không hỗ trợ, tránh ảnh chụp mặc định ở độ
+          // phân giải thấp (nhiều trình duyệt mặc định 640x480 nếu không
+          // yêu cầu gì) rồi bị QC chặn vì "low_resolution".
+          video: {
+            facingMode: { ideal: facingMode },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+          audio: false,
+        });
+        cameraVideo.srcObject = cameraStream;
+        cameraStatusEl.textContent = "";
+      } catch (error) {
+        cameraStatusEl.textContent = "Không thể mở camera: " + error.message;
+      }
+    }
+
+    function showCameraLiveView()
+    {
+      cameraLiveView.hidden = false;
+      cameraPreviewView.hidden = true;
+      cameraResultView.hidden = true;
+      cameraLiveControls.hidden = false;
+      cameraPreviewControls.hidden = true;
+      cameraResultControls.hidden = true;
+      cameraIssuesEl.hidden = true;
+      cameraIssuesEl.textContent = "";
+      if (capturedBlob) {
+        URL.revokeObjectURL(cameraPreviewImg.src);
+        capturedBlob = null;
+      }
+    }
+
+    function showCameraPreviewView()
+    {
+      cameraLiveView.hidden = true;
+      cameraPreviewView.hidden = false;
+      cameraResultView.hidden = true;
+      cameraLiveControls.hidden = true;
+      cameraPreviewControls.hidden = false;
+      cameraResultControls.hidden = true;
+    }
+
+    function showCameraResultView()
+    {
+      cameraLiveView.hidden = true;
+      cameraPreviewView.hidden = true;
+      cameraResultView.hidden = false;
+      cameraLiveControls.hidden = true;
+      cameraPreviewControls.hidden = true;
+      cameraResultControls.hidden = false;
+    }
+
+    openCameraBtn.addEventListener("click", async () =>
+    {
+      cameraModal.hidden = false;
+      showCameraLiveView();
+
+      const unsupportedReason = cameraUnsupportedReason();
+      if (unsupportedReason) {
+        cameraStatusEl.textContent = unsupportedReason;
+        return;
+      }
+
+      cameraFacingMode = "environment";
+      await startCameraStream(cameraFacingMode);
+    });
+
+    cameraCloseBtn.addEventListener("click", () =>
+    {
+      stopCameraStream();
+      cameraModal.hidden = true;
+    });
+
+    cameraSwitchBtn.addEventListener("click", async () =>
+    {
+      cameraFacingMode = cameraFacingMode === "environment" ? "user" : "environment";
+      await startCameraStream(cameraFacingMode);
+    });
+
+    cameraCaptureBtn.addEventListener("click", () =>
+    {
+      const width = cameraVideo.videoWidth;
+      const height = cameraVideo.videoHeight;
+      if (!width || !height) return;
+      cameraCanvas.width = width;
+      cameraCanvas.height = height;
+      cameraCanvas.getContext("2d").drawImage(cameraVideo, 0, 0, width, height);
+      cameraCanvas.toBlob((blob) =>
+      {
+        capturedBlob = blob;
+        cameraPreviewImg.src = URL.createObjectURL(blob);
+        showCameraPreviewView();
+      }, "image/jpeg", 0.92);
+    });
+
+    cameraRetakeBtn.addEventListener("click", showCameraLiveView);
+
+    function renderCameraIssues(messages)
+    {
+      cameraIssuesEl.innerHTML = "";
+      const title = document.createElement("strong");
+      title.textContent = "Ảnh chưa phù hợp, vui lòng chụp lại:";
+      cameraIssuesEl.appendChild(title);
+      const list = document.createElement("ul");
+      for (const message of messages) {
+        const item = document.createElement("li");
+        item.textContent = message;
+        list.appendChild(item);
+      }
+      cameraIssuesEl.appendChild(list);
+      cameraIssuesEl.hidden = false;
+    }
+
+    function renderCameraResult(scan)
+    {
+      cameraResultImg.src = scan.view_url;
+      const parts = [];
+      parts.push(scan.status === "warning" ? "Đã crop (có cảnh báo)" : "Đã crop thành công");
+      if (scan.warnings && scan.warnings.length) parts.push(scan.warnings.join(", "));
+      cameraResultStatusEl.textContent = parts.join(" · ");
+      cameraResultDownloadLink.href = scan.download_url;
+      showCameraResultView();
+    }
+
+    cameraUseBtn.addEventListener("click", async () =>
+    {
+      if (!capturedBlob) return;
+      cameraUseBtn.disabled = true;
+      cameraRetakeBtn.disabled = true;
+      cameraIssuesEl.hidden = true;
+      cameraStatusEl.textContent = "Đang kiểm tra và crop ảnh...";
+
+      const filename = `capture_${Date.now()}.jpg`;
+      const formData = new FormData();
+      formData.append("file", capturedBlob, filename);
+      formData.append("mode", document.getElementById("opt-mode").value);
+      formData.append("rotate", document.getElementById("opt-rotate").value);
+      formData.append("crop", document.getElementById("opt-crop").checked);
+      formData.append("debug", document.getElementById("opt-debug").checked);
+
+      try {
+        // Một endpoint duy nhất vừa QC vừa crop luôn nếu đạt - chỉ một lượt
+        // upload thay vì gọi QC rồi lại upload lần nữa để xử lý (đỡ tốn
+        // băng thông + khỏi chạy GrabCut trùng lặp trên cùng ảnh, vốn là lý
+        // do chính khiến bước này "hơi lâu" khi test qua mạng di động).
+        const response = await fetch("/api/capture/scan", { method: "POST", body: formData });
+        const result = await response.json().catch(() => null);
+        if (response.ok && result && result.passed) {
+          renderCameraResult(result.scan);
+        } else if (response.ok && result) {
+          const messages = (result.issues && result.issues.length)
+            ? result.issues.map((issue) => issue.message)
+            : ["Ảnh không đạt yêu cầu chất lượng, vui lòng chụp lại."];
+          renderCameraIssues(messages);
+        } else {
+          renderCameraIssues([`Lỗi xử lý ảnh: HTTP ${response.status}`]);
+        }
+      } catch (error) {
+        renderCameraIssues(["Lỗi kiểm tra/xử lý ảnh: " + error.message]);
+      } finally {
+        cameraStatusEl.textContent = "";
+        cameraUseBtn.disabled = false;
+        cameraRetakeBtn.disabled = false;
+      }
+    });
+
+    cameraResultRetakeBtn.addEventListener("click", showCameraLiveView);
+
+    cameraResultDoneBtn.addEventListener("click", () =>
+    {
+      stopCameraStream();
+      cameraModal.hidden = true;
     });
 
     function openCompareModal(originalUrl, resultUrl, isPdf)

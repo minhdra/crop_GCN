@@ -5,5 +5,6 @@ __pycache__/
 *.egg-info/
 .DS_Store
 .claude
+input_files
 output_scans
 .env
