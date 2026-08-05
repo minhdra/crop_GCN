@@ -1,0 +1,14 @@
+# Image phục vụ index.html — trang thao tác tay (chụp/tải ảnh) gọi sang API
+# qc-scanner thật QUA REVERSE PROXY của chính nginx này (xem nginx.web.conf).
+# KHÔNG đóng gói API ở đây; xem Dockerfile + docker-compose.yml cho API.
+#
+# Lý do có proxy thay vì để index.html gọi thẳng IP API: trang này chạy sau
+# HTTPS trong khi API chỉ có HTTP thuần — gọi thẳng bị trình duyệt chặn vì
+# "mixed content". Đổi IP/port của API thật thì sửa `proxy_pass` trong
+# nginx.web.conf rồi build lại image này.
+FROM nginx:alpine
+
+COPY index.html /usr/share/nginx/html/index.html
+COPY nginx.web.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80

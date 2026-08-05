@@ -1,0 +1,45 @@
+# docker compose -f docker-compose.web.yml up --build -d   →   trang test ở http://<IP-máy-này>:8090
+#
+# Dựng TRANG TĨNH index.html (giao diện thao tác tay: chụp/tải ảnh, gọi QC
+# Scanner API) CỘNG một reverse proxy nhỏ (nginx.web.conf) chuyển tiếp "/api/"
+# sang API thật ở http://192.168.120.9:5000. KHÔNG chạy API ở đây — API chạy
+# riêng bằng docker-compose.yml.
+#
+# Vì sao có proxy thay vì để trình duyệt gọi thẳng IP API: nơi trang này được
+# host thật (vd https://ocr-staging.hanoi.gov.vn/) chạy HTTPS, còn API chỉ có
+# HTTP thuần — gọi thẳng bị trình duyệt chặn ngay là "mixed content", không
+# liên quan gì tới CORS. Proxy qua cùng origin giải quyết cả hai: vừa hết mixed
+# content (chặng trình duyệt thấy chỉ có một origin HTTPS), vừa hết cần bật CORS
+# ở API (request không còn là cross-origin nữa). Đổi IP/port API thật thì sửa
+# `proxy_pass` trong nginx.web.conf, không phải file này.
+#
+# ⚠️ Chưa build/chạy thử trên máy thật — cùng tình trạng với docker-compose.yml (OPS-3).
+# Đã build + chạy thử cục bộ (curl tới container) lúc viết file này, xem lịch sử trò chuyện.
+
+services:
+  qc-scanner-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    image: qc-scanner-web:local
+    container_name: qc-scanner-web
+
+    ports:
+      # Đổi "8090:80" thành "127.0.0.1:8090:80" nếu chỉ cần mở trên chính máy này
+      # (vd khi có reverse proxy/ingress bên ngoài đứng trước container, tự lo TLS
+      # cho https://ocr-staging.hanoi.gov.vn/ rồi mới forward vào cổng 8090 này).
+      - "8090:80"
+
+    restart: unless-stopped
+    stop_grace_period: 5s
+
+    healthcheck:
+      # nginx:alpine có busybox wget sẵn, không cần cài thêm gì.
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
+      start_period: 5s
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+    security_opt:
+      - no-new-privileges:true

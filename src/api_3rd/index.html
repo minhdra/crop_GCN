@@ -1,0 +1,1188 @@
+<!doctype html>
+<html lang="vi">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QC Scanner</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --border: #d0d0d0;
+      --bg-soft: #f6f6f7;
+      --success: #1a7f37;
+      --success-bg: #dafbe1;
+      --warning: #9a6700;
+      --warning-bg: #fff8c5;
+      --error: #b91c1c;
+      --error-bg: #ffe6e6;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --border: #3d3d3d;
+        --bg-soft: #1e1e1e;
+        --success-bg: #0f2e18;
+        --warning-bg: #332b00;
+        --error-bg: #3a0d0d;
+      }
+
+      body {
+        background: #121212;
+        color: #eaeaea;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      line-height: 1.5;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      margin-bottom: 0.25rem;
+    }
+
+    h2 {
+      font-size: 1rem;
+      margin: 0 0 0.5rem;
+    }
+
+    p.subtitle {
+      color: #777;
+      margin-top: 0;
+    }
+
+    section {
+      margin-top: 1.5rem;
+    }
+
+    section.secondary {
+      padding-top: 1.25rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .capture-row {
+      display: flex;
+      justify-content: center;
+      margin: 1rem 0;
+    }
+
+    button#open-camera {
+      padding: 0.9rem 1.8rem;
+      border-radius: 10px;
+      border: none;
+      background: #3b82f6;
+      color: white;
+      font-size: 1.05rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin: 1rem 0;
+      padding: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .options label {
+      display: flex;
+      flex-direction: column;
+      font-size: 0.85rem;
+      gap: 0.25rem;
+    }
+
+    .options .checkbox {
+      flex-direction: row;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .options .hint {
+      flex-basis: 100%;
+      margin: 0;
+      font-size: 0.78rem;
+      color: #777;
+    }
+
+    select {
+      padding: 0.35rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: inherit;
+    }
+
+    .dropzone {
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 1.5rem;
+      text-align: center;
+      cursor: pointer;
+      background: var(--bg-soft);
+      transition: border-color 0.15s;
+    }
+
+    .dropzone.dragover {
+      border-color: #3b82f6;
+    }
+
+    .dropzone input {
+      display: none;
+    }
+
+    #file-list {
+      list-style: none;
+      padding: 0;
+      margin: 1rem 0;
+    }
+
+    #file-list li {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.5rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 0.4rem;
+      font-size: 0.9rem;
+    }
+
+    #file-list button {
+      border: none;
+      background: none;
+      color: var(--error);
+      cursor: pointer;
+      font-size: 1rem;
+      padding: 0 0.25rem;
+    }
+
+    #clear-files {
+      margin: -0.5rem 0 1rem;
+      padding: 0.35rem 0.9rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+
+    button#submit {
+      padding: 0.6rem 1.4rem;
+      border-radius: 8px;
+      border: none;
+      background: #3b82f6;
+      color: white;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+
+    button#submit:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1.5rem;
+      font-size: 0.9rem;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.6rem;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--bg-soft);
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+
+    .badge.success {
+      color: var(--success);
+      background: var(--success-bg);
+    }
+
+    .badge.warning {
+      color: var(--warning);
+      background: var(--warning-bg);
+    }
+
+    .badge.error {
+      color: var(--error);
+      background: var(--error-bg);
+    }
+
+    .reason-list {
+      margin: 0;
+      padding-left: 1.1rem;
+    }
+
+    .reason-list li {
+      margin-bottom: 0.25rem;
+    }
+
+    .reason-list .hint-text {
+      display: block;
+      color: #777;
+      font-size: 0.82rem;
+    }
+
+    .actions a {
+      margin-right: 0.6rem;
+      font-size: 0.85rem;
+    }
+
+    .actions button.link-button {
+      margin-right: 0.6rem;
+      font-size: 0.85rem;
+      border: none;
+      background: none;
+      color: #3b82f6;
+      cursor: pointer;
+      padding: 0;
+      text-decoration: underline;
+      font-family: inherit;
+    }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .modal-overlay[hidden] {
+      display: none;
+    }
+
+    .modal-box {
+      background: #000;
+      color: #eaeaea;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.6rem 1rem;
+      border-bottom: 1px solid #333;
+      font-size: 0.95rem;
+      flex-shrink: 0;
+    }
+
+    .modal-header button {
+      border: none;
+      background: none;
+      font-size: 1.4rem;
+      cursor: pointer;
+      color: inherit;
+      line-height: 1;
+    }
+
+    .modal-body {
+      flex: 1;
+      display: flex;
+      gap: 2px;
+      background: #333;
+      min-height: 0;
+    }
+
+    .compare-pane {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      background: #000;
+    }
+
+    .compare-pane img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+
+    #status-line {
+      margin-top: 0.75rem;
+      font-size: 0.9rem;
+      color: #777;
+    }
+
+    .camera-modal-box {
+      background: #000;
+      color: #eaeaea;
+      width: 100vw;
+      /* 100vh trên Safari di động tính cả phần bị thanh địa chỉ/thanh công
+         cụ che mất, đẩy nút cuối cùng ra ngoài màn hình thực tế nhìn thấy
+         được ("mất nút"). 100dvh (dynamic viewport height, hỗ trợ từ iOS
+         15.4+) tự trừ phần đó - vẫn giữ 100vh làm fallback cho trình duyệt
+         cũ hơn. */
+      height: 100vh;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .camera-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.6rem 1rem;
+      padding-top: max(0.6rem, env(safe-area-inset-top));
+      border-bottom: 1px solid #333;
+      font-size: 0.95rem;
+      flex-shrink: 0;
+    }
+
+    .camera-header button {
+      border: none;
+      background: none;
+      font-size: 1.4rem;
+      cursor: pointer;
+      color: inherit;
+      line-height: 1;
+    }
+
+    .camera-body {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      background: #000;
+    }
+
+    #camera-live-view,
+    #camera-preview-view,
+    #camera-result-view {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+
+    /* [hidden] chỉ thắng khi KHÔNG có rule display khác cùng cấp độ ưu
+       tiên (origin) đè lên - author CSS "display: flex" ở trên sẽ thắng
+       UA stylesheet "[hidden]{display:none}" nếu thiếu override tường
+       minh này (đã gặp đúng lỗi này với .camera-controls ở trên). */
+    #camera-live-view[hidden],
+    #camera-preview-view[hidden],
+    #camera-result-view[hidden] {
+      display: none;
+    }
+
+    .camera-body video,
+    .camera-body img {
+      max-width: 100%;
+      max-height: 100%;
+      min-height: 0;
+      object-fit: contain;
+    }
+
+    .camera-status {
+      position: absolute;
+      top: 0.5rem;
+      left: 0;
+      right: 0;
+      text-align: center;
+      font-size: 0.85rem;
+      color: #ddd;
+      pointer-events: none;
+    }
+
+    .camera-issues {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--error-bg);
+      color: var(--error);
+      padding: 0.75rem 1rem;
+      font-size: 0.88rem;
+      max-height: 45%;
+      overflow-y: auto;
+    }
+
+    .camera-issues ul {
+      margin: 0.35rem 0 0;
+      padding-left: 1.2rem;
+    }
+
+    .camera-issues .hint-text {
+      display: block;
+      opacity: 0.85;
+      font-size: 0.82rem;
+    }
+
+    .camera-controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 0.75rem 1rem;
+      padding: 0.85rem 1rem;
+      /* Chừa khoảng cho vùng home-indicator/bo góc màn hình ở cuối iPhone
+         không có nút Home - nếu không nút cuối dễ bị che/khó bấm chuẩn. */
+      padding-bottom: max(0.85rem, env(safe-area-inset-bottom));
+      flex-shrink: 0;
+    }
+
+    .camera-controls[hidden] {
+      display: none;
+    }
+
+    .camera-controls button,
+    .camera-controls a {
+      padding: 0.65rem 1.1rem;
+      border-radius: 8px;
+      border: 1px solid #555;
+      background: #1c1c1c;
+      color: #eaeaea;
+      font-size: 0.9rem;
+      cursor: pointer;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .camera-controls button#camera-capture {
+      background: #3b82f6;
+      border-color: #3b82f6;
+      color: white;
+      font-weight: 600;
+    }
+
+    .camera-controls button#camera-use,
+    .camera-controls button#camera-result-done {
+      background: #1a7f37;
+      border-color: #1a7f37;
+      color: white;
+      font-weight: 600;
+    }
+
+    .camera-controls a#camera-result-download {
+      background: #3b82f6;
+      border-color: #3b82f6;
+      color: white;
+      font-weight: 600;
+    }
+
+    .camera-controls button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .camera-result-status {
+      margin-top: 0.6rem;
+      text-align: center;
+      font-size: 0.85rem;
+      color: #ddd;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>QC Scanner</h1>
+  <p class="subtitle">Chụp hoặc tải ảnh tài liệu — máy chấm chất lượng và nắn phẳng theo kiểu scanner.</p>
+
+  <div class="options">
+    <label>
+      Hint dành cho
+      <select id="opt-audience">
+        <option value="capturer" selected>capturer (người chụp)</option>
+        <option value="operator">operator (người soi kho ảnh)</option>
+      </select>
+    </label>
+    <label class="checkbox">
+      <input type="checkbox" id="opt-pre-cropped" />
+      Ảnh đã cắt sát từ trước
+    </label>
+    <p class="hint">"Ảnh đã cắt sát từ trước" bỏ qua các cảnh báo về việc chạm mép khung — dùng cho ảnh lấy từ kho đã
+      cắt sẵn.</p>
+  </div>
+
+  <section>
+    <h2>📷 Chụp ảnh tài liệu</h2>
+    <div class="capture-row">
+      <button id="open-camera" type="button">📷 Mở camera</button>
+    </div>
+  </section>
+
+  <section class="secondary">
+    <h2>Hoặc tải ảnh có sẵn</h2>
+    <div class="dropzone" id="dropzone">
+      <p>Kéo thả ảnh vào đây, hoặc bấm để chọn (chọn được nhiều ảnh cùng lúc)</p>
+      <input type="file" id="file-input" multiple accept=".jpg,.jpeg,.png,.bmp,.tiff,.webp" />
+    </div>
+
+    <ul id="file-list"></ul>
+    <button id="clear-files" type="button" hidden>Bỏ tất cả</button>
+
+    <button id="submit" disabled>Xử lý</button>
+    <div id="status-line"></div>
+
+    <table id="results" hidden>
+      <thead>
+        <tr>
+          <th>File</th>
+          <th>Trạng thái</th>
+          <th>Lý do</th>
+          <th>Thời gian</th>
+          <th>Liên kết</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <div class="modal-overlay" id="compare-modal" hidden>
+    <div class="modal-box">
+      <div class="modal-header">
+        <span>So sánh ảnh gốc / kết quả</span>
+        <button id="compare-close" type="button">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="compare-pane">
+          <img id="compare-original-img" alt="Ảnh gốc" />
+        </div>
+        <div class="compare-pane">
+          <img id="compare-result-img" alt="Ảnh kết quả" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="camera-modal" hidden>
+    <div class="camera-modal-box">
+      <div class="camera-header">
+        <span>Chụp ảnh tài liệu</span>
+        <button id="camera-close" type="button">✕</button>
+      </div>
+      <div class="camera-body">
+        <div id="camera-live-view">
+          <video id="camera-video" autoplay playsinline muted></video>
+        </div>
+        <div id="camera-preview-view" hidden>
+          <img id="camera-preview-img" alt="Ảnh vừa chụp" />
+        </div>
+        <div id="camera-result-view" hidden>
+          <img id="camera-result-img" alt="Ảnh đã nắn" />
+          <div class="camera-result-status" id="camera-result-status"></div>
+        </div>
+        <div class="camera-status" id="camera-status"></div>
+        <div class="camera-issues" id="camera-issues" hidden></div>
+      </div>
+      <div class="camera-controls" id="camera-live-controls">
+        <button id="camera-switch" type="button">🔄 Đổi camera</button>
+        <button id="camera-capture" type="button">⬤ Chụp</button>
+      </div>
+      <div class="camera-controls" id="camera-preview-controls" hidden>
+        <button id="camera-retake" type="button">↩ Chụp lại</button>
+        <button id="camera-use" type="button">✓ Dùng ảnh này</button>
+      </div>
+      <div class="camera-controls" id="camera-result-controls" hidden>
+        <button id="camera-result-retake" type="button">📷 Chụp ảnh khác</button>
+        <a id="camera-result-download" class="camera-download-link" download>⬇ Tải xuống</a>
+        <button id="camera-result-done" type="button">✓ Xong</button>
+      </div>
+    </div>
+  </div>
+  <canvas id="camera-canvas" hidden></canvas>
+
+  <script>
+    // index.html được host tách rời khỏi API thật (192.168.120.9:5000, HTTP
+    // thuần, không CORS). Gọi thẳng IP đó từ một trang HTTPS bị trình duyệt
+    // chặn vì "mixed content", nên fetch trỏ vào "/api" cùng origin với trang -
+    // nginx của container này (xem nginx.web.conf) reverse-proxy "/api/" sang
+    // API thật. Đổi backend thật thì sửa `proxy_pass` trong nginx.web.conf,
+    // không sửa hằng số này.
+    const API_BASE = "/api";
+
+    const optAudience = document.getElementById("opt-audience");
+    const optPreCropped = document.getElementById("opt-pre-cropped");
+
+    const dropzone = document.getElementById("dropzone");
+    const fileInput = document.getElementById("file-input");
+    const fileListEl = document.getElementById("file-list");
+    const clearFilesBtn = document.getElementById("clear-files");
+    const submitBtn = document.getElementById("submit");
+    const statusLine = document.getElementById("status-line");
+    const resultsTable = document.getElementById("results");
+    const resultsBody = resultsTable.querySelector("tbody");
+    const compareModal = document.getElementById("compare-modal");
+    const compareOriginalImg = document.getElementById("compare-original-img");
+    const compareResultImg = document.getElementById("compare-result-img");
+    const compareCloseBtn = document.getElementById("compare-close");
+
+    // --- Gọi API: POST /?format=json[&audience=...][&pre_cropped=1] --------
+    //
+    // Hợp đồng thật (docs/api.md): một endpoint duy nhất, một ảnh mỗi request,
+    // không có mode/rotate/dpi/crop-toggle/debug — máy luôn tự dò biên và luôn
+    // nắn phẳng nếu tìm được. `?format=json` để lấy đủ verdict/reasons/image
+    // (base64) thay vì PNG trần, kể cả khi verdict là "fail" (422).
+    async function callScanApi(file, { audience, preCropped })
+    {
+      const params = new URLSearchParams({ format: "json" });
+      if (audience) params.set("audience", audience);
+      if (preCropped) params.set("pre_cropped", "1");
+
+      const formData = new FormData();
+      formData.append("file", file, file.name || "capture.jpg");
+
+      const response = await fetch(`${API_BASE}/?${params.toString()}`, { method: "POST", body: formData });
+      let body = null;
+      try {
+        body = await response.json();
+      } catch {
+        body = null;
+      }
+      return { response, body };
+    }
+
+    function currentOptions()
+    {
+      return {
+        audience: optAudience.value,
+        preCropped: optPreCropped.checked
+      };
+    }
+
+    function dataUrlFromBase64Png(base64)
+    {
+      return base64 ? `data:image/png;base64,${base64}` : null;
+    }
+
+    let selectedFiles = [];
+    let originalFileUrls = [];
+
+    function formatSize(bytes)
+    {
+      if (bytes < 1024) return bytes + " B";
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+      return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
+    function renderFileList()
+    {
+      fileListEl.innerHTML = "";
+      selectedFiles.forEach((file, index) =>
+      {
+        const li = document.createElement("li");
+        const label = document.createElement("span");
+        label.textContent = `${file.name} (${formatSize(file.size)})`;
+        const removeBtn = document.createElement("button");
+        removeBtn.textContent = "✕";
+        removeBtn.title = "Bỏ file này";
+        removeBtn.addEventListener("click", () =>
+        {
+          selectedFiles.splice(index, 1);
+          renderFileList();
+        });
+        li.appendChild(label);
+        li.appendChild(removeBtn);
+        fileListEl.appendChild(li);
+      });
+      submitBtn.disabled = selectedFiles.length === 0;
+      clearFilesBtn.hidden = selectedFiles.length === 0;
+    }
+
+    function addFiles(fileArray)
+    {
+      for (const file of fileArray) {
+        selectedFiles.push(file);
+      }
+      renderFileList();
+    }
+
+    clearFilesBtn.addEventListener("click", () =>
+    {
+      selectedFiles = [];
+      renderFileList();
+    });
+
+    // --- Chụp ảnh từ camera (mobile/laptop) ---------------------------
+    //
+    // Luồng: mở camera -> chụp -> gửi ảnh sang POST /?format=json. `verdict`
+    // "pass"/"warn" (200) hiện ảnh đã nắn; "fail" (422) hiện lý do và bắt
+    // chụp lại. Lỗi đầu vào (400/413) hiện thông báo lỗi.
+    const openCameraBtn = document.getElementById("open-camera");
+    const cameraModal = document.getElementById("camera-modal");
+    const cameraCloseBtn = document.getElementById("camera-close");
+    const cameraVideo = document.getElementById("camera-video");
+    const cameraCanvas = document.getElementById("camera-canvas");
+    const cameraLiveView = document.getElementById("camera-live-view");
+    const cameraPreviewView = document.getElementById("camera-preview-view");
+    const cameraPreviewImg = document.getElementById("camera-preview-img");
+    const cameraResultView = document.getElementById("camera-result-view");
+    const cameraResultImg = document.getElementById("camera-result-img");
+    const cameraResultStatusEl = document.getElementById("camera-result-status");
+    const cameraLiveControls = document.getElementById("camera-live-controls");
+    const cameraPreviewControls = document.getElementById("camera-preview-controls");
+    const cameraResultControls = document.getElementById("camera-result-controls");
+    const cameraSwitchBtn = document.getElementById("camera-switch");
+    const cameraCaptureBtn = document.getElementById("camera-capture");
+    const cameraRetakeBtn = document.getElementById("camera-retake");
+    const cameraUseBtn = document.getElementById("camera-use");
+    const cameraResultRetakeBtn = document.getElementById("camera-result-retake");
+    const cameraResultDownloadLink = document.getElementById("camera-result-download");
+    const cameraResultDoneBtn = document.getElementById("camera-result-done");
+    const cameraStatusEl = document.getElementById("camera-status");
+    const cameraIssuesEl = document.getElementById("camera-issues");
+
+    // Không set openCameraBtn.disabled khi thiếu hỗ trợ: nút bị disable im
+    // lặng khiến người dùng bấm không thấy phản hồi gì (đặc biệt trên mobile,
+    // không có hover để thấy title) - dễ tưởng nhầm là nút bị lỗi/không hoạt
+    // động. Thay vào đó vẫn cho bấm, mở modal và hiện rõ lý do cụ thể.
+    function cameraUnsupportedReason()
+    {
+      if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+        return window.isSecureContext
+          ? "Trình duyệt này không hỗ trợ mở camera."
+          : "Cần truy cập qua HTTPS (hoặc localhost) để mở camera - kết nối hiện tại không an toàn.";
+      }
+      return null;
+    }
+
+    let cameraStream = null;
+    let cameraFacingMode = "environment";
+    let capturedBlob = null;
+
+    function stopCameraStream()
+    {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach((track) => track.stop());
+        cameraStream = null;
+      }
+    }
+
+    async function startCameraStream(facingMode)
+    {
+      stopCameraStream();
+      cameraStatusEl.textContent = "Đang mở camera...";
+      try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+          // Không ràng buộc "min" cho width/height - máy không đáp ứng nổi
+          // sẽ khiến getUserMedia thất bại hẳn thay vì tự hạ xuống mức thấp
+          // hơn. "ideal" để trình duyệt cố gắng đạt tới nhưng vẫn tự chọn
+          // mức khác nếu camera không hỗ trợ, tránh ảnh chụp mặc định ở độ
+          // phân giải thấp (nhiều trình duyệt mặc định 640x480 nếu không
+          // yêu cầu gì) rồi bị QC chặn vì "LOW_RESOLUTION".
+          video: {
+            facingMode: { ideal: facingMode },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+          audio: false,
+        });
+        cameraVideo.srcObject = cameraStream;
+        cameraStatusEl.textContent = "";
+      } catch (error) {
+        cameraStatusEl.textContent = "Không thể mở camera: " + error.message;
+      }
+    }
+
+    function showCameraLiveView()
+    {
+      cameraLiveView.hidden = false;
+      cameraPreviewView.hidden = true;
+      cameraResultView.hidden = true;
+      cameraLiveControls.hidden = false;
+      cameraPreviewControls.hidden = true;
+      cameraResultControls.hidden = true;
+      cameraIssuesEl.hidden = true;
+      cameraIssuesEl.textContent = "";
+      if (capturedBlob) {
+        URL.revokeObjectURL(cameraPreviewImg.src);
+        capturedBlob = null;
+      }
+    }
+
+    function showCameraPreviewView()
+    {
+      cameraLiveView.hidden = true;
+      cameraPreviewView.hidden = false;
+      cameraResultView.hidden = true;
+      cameraLiveControls.hidden = true;
+      cameraPreviewControls.hidden = false;
+      cameraResultControls.hidden = true;
+    }
+
+    function showCameraResultView()
+    {
+      cameraLiveView.hidden = true;
+      cameraPreviewView.hidden = true;
+      cameraResultView.hidden = false;
+      cameraLiveControls.hidden = true;
+      cameraPreviewControls.hidden = true;
+      cameraResultControls.hidden = false;
+    }
+
+    openCameraBtn.addEventListener("click", async () =>
+    {
+      cameraModal.hidden = false;
+      showCameraLiveView();
+
+      const unsupportedReason = cameraUnsupportedReason();
+      if (unsupportedReason) {
+        cameraStatusEl.textContent = unsupportedReason;
+        return;
+      }
+
+      cameraFacingMode = "environment";
+      await startCameraStream(cameraFacingMode);
+    });
+
+    cameraCloseBtn.addEventListener("click", () =>
+    {
+      stopCameraStream();
+      cameraModal.hidden = true;
+    });
+
+    cameraSwitchBtn.addEventListener("click", async () =>
+    {
+      cameraFacingMode = cameraFacingMode === "environment" ? "user" : "environment";
+      await startCameraStream(cameraFacingMode);
+    });
+
+    cameraCaptureBtn.addEventListener("click", () =>
+    {
+      const width = cameraVideo.videoWidth;
+      const height = cameraVideo.videoHeight;
+      if (!width || !height) return;
+      cameraCanvas.width = width;
+      cameraCanvas.height = height;
+      cameraCanvas.getContext("2d").drawImage(cameraVideo, 0, 0, width, height);
+      cameraCanvas.toBlob((blob) =>
+      {
+        capturedBlob = blob;
+        cameraPreviewImg.src = URL.createObjectURL(blob);
+        showCameraPreviewView();
+      }, "image/jpeg", 0.92);
+    });
+
+    cameraRetakeBtn.addEventListener("click", showCameraLiveView);
+
+    function renderCameraIssues(title, reasons)
+    {
+      cameraIssuesEl.innerHTML = "";
+      const heading = document.createElement("strong");
+      heading.textContent = title;
+      cameraIssuesEl.appendChild(heading);
+      const list = document.createElement("ul");
+      for (const reason of reasons) {
+        const item = document.createElement("li");
+        item.textContent = reason.message;
+        if (reason.hint) {
+          const hintEl = document.createElement("span");
+          hintEl.className = "hint-text";
+          hintEl.textContent = reason.hint;
+          item.appendChild(hintEl);
+        }
+        list.appendChild(item);
+      }
+      cameraIssuesEl.appendChild(list);
+      cameraIssuesEl.hidden = false;
+    }
+
+    function renderCameraResult(body)
+    {
+      cameraResultImg.src = dataUrlFromBase64Png(body.image);
+      const warnReasons = body.reasons || [];
+      cameraResultStatusEl.textContent = body.verdict === "warn"
+        ? `Đã nắn xong, có ${warnReasons.length} cảnh báo`
+        : "Đã nắn thành công";
+      if (warnReasons.length) {
+        renderCameraIssues("Cảnh báo:", warnReasons);
+      }
+      cameraResultDownloadLink.href = cameraResultImg.src;
+      cameraResultDownloadLink.download = `scan_${Date.now()}.png`;
+      showCameraResultView();
+    }
+
+    cameraUseBtn.addEventListener("click", async () =>
+    {
+      if (!capturedBlob) return;
+      cameraUseBtn.disabled = true;
+      cameraRetakeBtn.disabled = true;
+      cameraIssuesEl.hidden = true;
+      cameraStatusEl.textContent = "Đang kiểm tra và nắn ảnh...";
+
+      const filename = `capture_${Date.now()}.jpg`;
+      const captureFile = new File([capturedBlob], filename, { type: "image/jpeg" });
+
+      try {
+        const { response, body } = await callScanApi(captureFile, currentOptions());
+        if ((response.status === 200) && body) {
+          renderCameraResult(body);
+        } else if (response.status === 422 && body) {
+          renderCameraIssues("Ảnh chưa đạt yêu cầu, vui lòng chụp lại:", body.reasons || []);
+        } else if (response.status === 400 && body) {
+          renderCameraIssues("Lỗi xử lý ảnh:", [body.error]);
+        } else {
+          renderCameraIssues("Lỗi xử lý ảnh:", [{ message: `HTTP ${response.status}` }]);
+        }
+      } catch (error) {
+        renderCameraIssues("Lỗi kiểm tra/xử lý ảnh:", [{ message: error.message }]);
+      } finally {
+        cameraStatusEl.textContent = "";
+        cameraUseBtn.disabled = false;
+        cameraRetakeBtn.disabled = false;
+      }
+    });
+
+    cameraResultRetakeBtn.addEventListener("click", showCameraLiveView);
+
+    cameraResultDoneBtn.addEventListener("click", () =>
+    {
+      stopCameraStream();
+      cameraModal.hidden = true;
+    });
+
+    function openCompareModal(originalUrl, resultUrl)
+    {
+      compareOriginalImg.src = originalUrl;
+      compareResultImg.src = resultUrl;
+      compareModal.hidden = false;
+    }
+
+    function closeCompareModal()
+    {
+      compareModal.hidden = true;
+      compareOriginalImg.src = "";
+      compareResultImg.src = "";
+    }
+
+    compareCloseBtn.addEventListener("click", closeCompareModal);
+    compareModal.addEventListener("click", (event) =>
+    {
+      if (event.target === compareModal) closeCompareModal();
+    });
+    document.addEventListener("keydown", (event) =>
+    {
+      if (event.key === "Escape" && !compareModal.hidden) closeCompareModal();
+    });
+
+    dropzone.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", (event) =>
+    {
+      addFiles(Array.from(event.target.files));
+      fileInput.value = "";
+    });
+
+    ["dragenter", "dragover"].forEach((eventName) =>
+    {
+      dropzone.addEventListener(eventName, (event) =>
+      {
+        event.preventDefault();
+        dropzone.classList.add("dragover");
+      });
+    });
+    ["dragleave", "drop"].forEach((eventName) =>
+    {
+      dropzone.addEventListener(eventName, (event) =>
+      {
+        event.preventDefault();
+        dropzone.classList.remove("dragover");
+      });
+    });
+    dropzone.addEventListener("drop", (event) =>
+    {
+      addFiles(Array.from(event.dataTransfer.files));
+    });
+
+    // verdict ("pass"/"warn"/"fail") + "error" cục bộ (lỗi input/network) ->
+    // lớp badge hiện có (success/warning/error).
+    const VERDICT_BADGE_CLASS = { pass: "success", warn: "warning", fail: "error", error: "error" };
+
+    function statusBadge(verdict)
+    {
+      const span = document.createElement("span");
+      span.className = `badge ${VERDICT_BADGE_CLASS[verdict] || "error"}`;
+      span.textContent = verdict;
+      return span;
+    }
+
+    function renderReasonList(reasons)
+    {
+      if (!reasons || reasons.length === 0) {
+        return document.createTextNode("-");
+      }
+      const list = document.createElement("ul");
+      list.className = "reason-list";
+      for (const reason of reasons) {
+        const item = document.createElement("li");
+        item.textContent = `[${reason.code}] ${reason.message}`;
+        if (reason.hint) {
+          const hintEl = document.createElement("span");
+          hintEl.className = "hint-text";
+          hintEl.textContent = reason.hint;
+          item.appendChild(hintEl);
+        }
+        list.appendChild(item);
+      }
+      return list;
+    }
+
+    function renderResults(results)
+    {
+      resultsBody.innerHTML = "";
+      for (const result of results) {
+        const row = document.createElement("tr");
+
+        const nameCell = document.createElement("td");
+        nameCell.textContent = result.filename;
+        row.appendChild(nameCell);
+
+        const statusCell = document.createElement("td");
+        statusCell.appendChild(statusBadge(result.verdict));
+        row.appendChild(statusCell);
+
+        const detailCell = document.createElement("td");
+        if (result.verdict === "error") {
+          detailCell.textContent = result.message || "-";
+        } else {
+          detailCell.appendChild(renderReasonList(result.reasons));
+        }
+        row.appendChild(detailCell);
+
+        const timeCell = document.createElement("td");
+        timeCell.textContent = result.client_round_trip_seconds != null
+          ? `${result.client_round_trip_seconds.toFixed(2)}s`
+          : "-";
+        row.appendChild(timeCell);
+
+        const linkCell = document.createElement("td");
+        linkCell.className = "actions";
+        if (result.originalFileUrl && result.imageDataUrl) {
+          const compareBtn = document.createElement("button");
+          compareBtn.type = "button";
+          compareBtn.className = "link-button";
+          compareBtn.textContent = "So sánh";
+          compareBtn.addEventListener("click", () => openCompareModal(result.originalFileUrl, result.imageDataUrl));
+          linkCell.appendChild(compareBtn);
+        }
+        if (result.imageDataUrl) {
+          const viewLink = document.createElement("a");
+          viewLink.href = result.imageDataUrl;
+          viewLink.target = "_blank";
+          viewLink.textContent = "Xem";
+          linkCell.appendChild(viewLink);
+
+          const downloadLink = document.createElement("a");
+          downloadLink.href = result.imageDataUrl;
+          downloadLink.download = `scan_${result.filename}.png`;
+          downloadLink.textContent = "Tải";
+          linkCell.appendChild(downloadLink);
+        }
+        row.appendChild(linkCell);
+
+        resultsBody.appendChild(row);
+      }
+      resultsTable.hidden = results.length === 0;
+    }
+
+    async function scanOneFile(file, options)
+    {
+      const startedAt = performance.now();
+      try {
+        const { response, body } = await callScanApi(file, options);
+        const roundTripTime = (performance.now() - startedAt) / 1000;
+
+        if ((response.status === 200 || response.status === 422) && body) {
+          return {
+            filename: file.name,
+            verdict: body.verdict,
+            reasons: body.reasons,
+            imageDataUrl: dataUrlFromBase64Png(body.image),
+            client_round_trip_seconds: roundTripTime
+          };
+        }
+
+        const message = body && body.error ? body.error.message : `HTTP ${response.status}`;
+        return {
+          filename: file.name,
+          verdict: "error",
+          message,
+          client_round_trip_seconds: roundTripTime
+        };
+      } catch (error) {
+        return {
+          filename: file.name,
+          verdict: "error",
+          message: error.message,
+          client_round_trip_seconds: (performance.now() - startedAt) / 1000
+        };
+      }
+    }
+
+    submitBtn.addEventListener("click", async () =>
+    {
+      if (selectedFiles.length === 0) return;
+
+      submitBtn.disabled = true;
+
+      originalFileUrls.forEach((url) => URL.revokeObjectURL(url));
+      originalFileUrls = [];
+
+      const options = currentOptions();
+
+      const results = [];
+      renderResults(results);
+
+      for (let i = 0; i < selectedFiles.length; i++) {
+        const file = selectedFiles[i];
+        statusLine.textContent = `Đang xử lý file ${i + 1}/${selectedFiles.length}: ${file.name}...`;
+        const result = await scanOneFile(file, options);
+        const originalFileUrl = URL.createObjectURL(file);
+        originalFileUrls.push(originalFileUrl);
+        result.originalFileUrl = originalFileUrl;
+        results.push(result);
+        renderResults(results);
+      }
+
+      const totalTime = results.reduce((sum, r) => sum + (r.client_round_trip_seconds || 0), 0);
+      statusLine.textContent = `Xong: ${results.length} file đã xử lý trong ${totalTime.toFixed(2)}s.`;
+      submitBtn.disabled = selectedFiles.length === 0;
+    });
+  </script>
+</body>
+
+</html>
