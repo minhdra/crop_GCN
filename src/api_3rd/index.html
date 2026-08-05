@@ -440,7 +440,7 @@
     .camera-status.warning {
       color: #ffd166;
       font-weight: 600;
-      opacity: 0.8;
+      opacity: 0.9;
     }
 
     .camera-issues {
@@ -462,7 +462,7 @@
     .camera-issues.warning {
       background: var(--warning-bg);
       color: var(--warning);
-      opacity: 0.8;
+      opacity: 0.9;
     }
 
     .camera-issues ul {
@@ -1015,9 +1015,7 @@
     {
       cameraResultImg.src = dataUrlFromBase64Png(body.image);
       const warnReasons = body.reasons || [];
-      cameraResultStatusEl.textContent = body.verdict === "warn"
-        ? `Đã nắn xong, có ${warnReasons.length} lưu ý nhỏ`
-        : "Đã nắn thành công";
+      cameraResultStatusEl.textContent = body.verdict === "warn" ? "" : "Đã nắn thành công";
       if (warnReasons.length) {
         renderCameraIssues("Lưu ý:", warnReasons, "warning");
       }
