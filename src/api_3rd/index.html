@@ -429,17 +429,38 @@
       pointer-events: none;
     }
 
+    /* Nền camera-modal luôn đen (#000) bất kể light/dark mode, nên dùng màu
+       riêng thay vì var(--error)/var(--warning) - các biến đó được canh
+       tương phản cho nền sáng, sẽ khó đọc trên nền đen. */
+    .camera-status.error {
+      color: #ff6b6b;
+      font-weight: 600;
+    }
+
+    .camera-status.warning {
+      color: #ffd166;
+      font-weight: 600;
+    }
+
     .camera-issues {
       position: absolute;
       bottom: 0;
       left: 0;
       right: 0;
-      background: var(--error-bg);
-      color: var(--error);
       padding: 0.75rem 1rem;
       font-size: 0.88rem;
       max-height: 45%;
       overflow-y: auto;
+    }
+
+    .camera-issues.error {
+      background: var(--error-bg);
+      color: var(--error);
+    }
+
+    .camera-issues.warning {
+      background: var(--warning-bg);
+      color: var(--warning);
     }
 
     .camera-issues ul {
@@ -828,10 +849,37 @@
       }
     }
 
+    // severity: null (trung tính), "warning" hoặc "error" - quyết định màu
+    // của dòng trạng thái trên cùng khung camera (xem .camera-status.error/
+    // .camera-status.warning).
+    function setCameraStatus(message, severity)
+    {
+      cameraStatusEl.textContent = message;
+      cameraStatusEl.classList.toggle("error", severity === "error");
+      cameraStatusEl.classList.toggle("warning", severity === "warning");
+    }
+
+    // Ánh xạ sang tiếng Việt dễ hiểu kèm hướng xử lý, thay vì in thẳng
+    // error.message (thường là tên lỗi kỹ thuật tiếng Anh của trình duyệt).
+    function friendlyCameraError(error)
+    {
+      const messages = {
+        NotAllowedError: "Chưa được cấp quyền dùng camera. Vui lòng vào cài đặt trình duyệt để cho phép truy cập camera rồi thử lại.",
+        PermissionDeniedError: "Chưa được cấp quyền dùng camera. Vui lòng vào cài đặt trình duyệt để cho phép truy cập camera rồi thử lại.",
+        NotFoundError: "Không tìm thấy camera trên thiết bị này.",
+        DevicesNotFoundError: "Không tìm thấy camera trên thiết bị này.",
+        NotReadableError: "Camera đang được ứng dụng khác sử dụng. Vui lòng đóng ứng dụng đó rồi thử lại.",
+        TrackStartError: "Camera đang được ứng dụng khác sử dụng. Vui lòng đóng ứng dụng đó rồi thử lại.",
+        OverconstrainedError: "Camera trên thiết bị này không đáp ứng được yêu cầu. Vui lòng thử đổi camera hoặc dùng thiết bị khác.",
+        AbortError: "Không thể khởi động camera. Vui lòng thử lại.",
+      };
+      return messages[error.name] || `Không thể mở camera (${error.message}). Vui lòng thử lại.`;
+    }
+
     async function startCameraStream(facingMode)
     {
       stopCameraStream();
-      cameraStatusEl.textContent = "Đang mở camera...";
+      setCameraStatus("Đang mở camera...");
       try {
         cameraStream = await navigator.mediaDevices.getUserMedia({
           // Không ràng buộc "min" cho width/height - máy không đáp ứng nổi
@@ -848,9 +896,9 @@
           audio: false,
         });
         cameraVideo.srcObject = cameraStream;
-        cameraStatusEl.textContent = "";
+        setCameraStatus("");
       } catch (error) {
-        cameraStatusEl.textContent = "Không thể mở camera: " + error.message;
+        setCameraStatus(friendlyCameraError(error), "error");
       }
     }
 
@@ -897,7 +945,7 @@
 
       const unsupportedReason = cameraUnsupportedReason();
       if (unsupportedReason) {
-        cameraStatusEl.textContent = unsupportedReason;
+        setCameraStatus(unsupportedReason, "error");
         return;
       }
 
@@ -935,9 +983,13 @@
 
     cameraRetakeBtn.addEventListener("click", showCameraLiveView);
 
-    function renderCameraIssues(title, reasons)
+    // severity: "warning" cho cảnh báo không chặn (verdict "warn" vẫn dùng
+    // được ảnh), "error" (mặc định) cho lỗi thật/verdict "fail" cần chụp lại.
+    function renderCameraIssues(title, reasons, severity = "error")
     {
       cameraIssuesEl.innerHTML = "";
+      cameraIssuesEl.classList.toggle("warning", severity === "warning");
+      cameraIssuesEl.classList.toggle("error", severity !== "warning");
       const heading = document.createElement("strong");
       heading.textContent = title;
       cameraIssuesEl.appendChild(heading);
@@ -962,10 +1014,10 @@
       cameraResultImg.src = dataUrlFromBase64Png(body.image);
       const warnReasons = body.reasons || [];
       cameraResultStatusEl.textContent = body.verdict === "warn"
-        ? `Đã nắn xong, có ${warnReasons.length} cảnh báo`
+        ? `Đã nắn xong, có ${warnReasons.length} lưu ý nhỏ`
         : "Đã nắn thành công";
       if (warnReasons.length) {
-        renderCameraIssues("Cảnh báo:", warnReasons);
+        renderCameraIssues("Lưu ý:", warnReasons, "warning");
       }
       cameraResultDownloadLink.href = cameraResultImg.src;
       cameraResultDownloadLink.download = `scan_${Date.now()}.png`;
@@ -978,7 +1030,7 @@
       cameraUseBtn.disabled = true;
       cameraRetakeBtn.disabled = true;
       cameraIssuesEl.hidden = true;
-      cameraStatusEl.textContent = "Đang kiểm tra và nắn ảnh...";
+      setCameraStatus("Đang kiểm tra và nắn ảnh...");
 
       const filename = `capture_${Date.now()}.jpg`;
       const captureFile = new File([capturedBlob], filename, { type: "image/jpeg" });
@@ -990,14 +1042,14 @@
         } else if (response.status === 422 && body) {
           renderCameraIssues("Ảnh chưa đạt yêu cầu, vui lòng chụp lại:", body.reasons || []);
         } else if (response.status === 400 && body) {
-          renderCameraIssues("Lỗi xử lý ảnh:", [body.error]);
+          renderCameraIssues("Không xử lý được ảnh, vui lòng thử lại:", [body.error]);
         } else {
-          renderCameraIssues("Lỗi xử lý ảnh:", [{ message: `HTTP ${response.status}` }]);
+          renderCameraIssues("Không xử lý được ảnh, vui lòng thử lại:", [{ message: `HTTP ${response.status}` }]);
         }
       } catch (error) {
-        renderCameraIssues("Lỗi kiểm tra/xử lý ảnh:", [{ message: error.message }]);
+        renderCameraIssues("Có lỗi khi kết nối máy chủ, vui lòng thử lại:", [{ message: error.message }]);
       } finally {
-        cameraStatusEl.textContent = "";
+        setCameraStatus("");
         cameraUseBtn.disabled = false;
         cameraRetakeBtn.disabled = false;
       }
