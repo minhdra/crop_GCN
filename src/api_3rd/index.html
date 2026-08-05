@@ -627,14 +627,6 @@
   </div>
   <canvas id="camera-canvas" hidden></canvas>
 
-  <!-- Đọc PDF ở phía trình duyệt để tách từng trang thành ảnh trước khi gửi -
-       API QC Scanner bên thứ 3 chỉ nhận một ảnh mỗi request (xem README §Hợp
-       đồng API), không có endpoint nhận PDF. -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script>
-    pdfjsLib.GlobalWorkerOptions.workerSrc =
-      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-  </script>
   <script>
     // index.html được host tách rời khỏi API thật (192.168.120.9:5000, HTTP
     // thuần, không CORS). Gọi thẳng IP đó từ một trang HTTPS bị trình duyệt
@@ -662,10 +654,13 @@
 
     // --- Gọi API: POST /?format=json[&audience=...][&pre_cropped=1] --------
     //
-    // Hợp đồng thật (docs/api.md): một endpoint duy nhất, một ảnh mỗi request,
-    // không có mode/rotate/dpi/crop-toggle/debug — máy luôn tự dò biên và luôn
-    // nắn phẳng nếu tìm được. `?format=json` để lấy đủ verdict/reasons/image
-    // (base64) thay vì PNG trần, kể cả khi verdict là "fail" (422).
+    // Hợp đồng thật (qc_scanner/docs/api.md): một endpoint duy nhất, nhận
+    // ẢNH hoặc PDF trong cùng field `file` (định dạng dò từ nội dung, không
+    // từ tên file) - không có mode/rotate/dpi/crop-toggle/debug, máy luôn tự
+    // dò biên và luôn nắn phẳng nếu tìm được. `?format=json` để lấy đủ
+    // verdict/reasons/image (base64) thay vì PNG trần, kể cả khi verdict là
+    // "fail" (422). PDF nhiều trang luôn trả JSON (bất kể có ?format=json
+    // hay không) với hình dạng khác - xem normalizeApiResult().
     async function callScanApi(file, { audience, preCropped })
     {
       const params = new URLSearchParams({ format: "json" });
@@ -696,6 +691,38 @@
     function dataUrlFromBase64Png(base64)
     {
       return base64 ? `data:image/png;base64,${base64}` : null;
+    }
+
+    function isPdfFile(file)
+    {
+      return file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+    }
+
+    // PDF một trang (và ảnh rời) trả đúng hợp đồng phẳng {verdict, reasons,
+    // image}. PDF nhiều trang trả {source, verdict, page_count, pages[]} -
+    // `verdict` ở đây là trang TỆ NHẤT, không phải trang đầu (xem
+    // qc_scanner/docs/api.md §2). Tách thành nhiều dòng, một dòng/trang, để
+    // không giấu mất trang lỗi phía sau verdict gộp.
+    function normalizeApiResult(filename, body)
+    {
+      if (Array.isArray(body.pages)) {
+        // downloadName riêng, không chứa "/" - filename hiển thị có "/" (vd
+        // "trang 1/3") sẽ làm hỏng thuộc tính download="..." của thẻ <a>.
+        return body.pages.map((page) => ({
+          filename: body.page_count > 1 ? `${filename} (trang ${page.page}/${body.page_count})` : filename,
+          downloadName: body.page_count > 1 ? `${filename}_trang${page.page}` : filename,
+          verdict: page.verdict,
+          reasons: page.reasons,
+          imageDataUrl: dataUrlFromBase64Png(page.image)
+        }));
+      }
+      return [{
+        filename,
+        downloadName: filename,
+        verdict: body.verdict,
+        reasons: body.reasons,
+        imageDataUrl: dataUrlFromBase64Png(body.image)
+      }];
     }
 
     let selectedFiles = [];
@@ -732,53 +759,11 @@
       clearFilesBtn.hidden = selectedFiles.length === 0;
     }
 
-    // API QC Scanner chỉ nhận một ảnh mỗi request (xem README §Hợp đồng API),
-    // không có endpoint nhận PDF - nên PDF được tách thành ảnh từng trang
-    // ngay ở trình duyệt (pdf.js) trước khi đưa vào cùng luồng xử lý như ảnh
-    // thường. Scale 2.0 để đủ độ phân giải qua ngưỡng LOW_RESOLUTION của QC.
-    const PDF_RENDER_SCALE = 2.0;
-
-    function isPdfFile(file)
+    function addFiles(fileArray)
     {
-      return file.type === "application/pdf" || /\.pdf$/i.test(file.name);
-    }
-
-    async function pdfFileToImageFiles(pdfFile)
-    {
-      const buffer = await pdfFile.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
-      const baseName = pdfFile.name.replace(/\.pdf$/i, "");
-      const imageFiles = [];
-      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-        const page = await pdf.getPage(pageNum);
-        const viewport = page.getViewport({ scale: PDF_RENDER_SCALE });
-        const canvas = document.createElement("canvas");
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
-        const suffix = pdf.numPages > 1 ? `_trang${pageNum}` : "";
-        imageFiles.push(new File([blob], `${baseName}${suffix}.jpg`, { type: "image/jpeg" }));
-      }
-      return imageFiles;
-    }
-
-    async function addFiles(fileArray)
-    {
-      submitBtn.disabled = true;
       for (const file of fileArray) {
-        if (!isPdfFile(file)) {
-          selectedFiles.push(file);
-          continue;
-        }
-        statusLine.textContent = `Đang đọc PDF ${file.name}...`;
-        try {
-          selectedFiles.push(...(await pdfFileToImageFiles(file)));
-        } catch (error) {
-          statusLine.textContent = `Không đọc được PDF ${file.name}: ${error.message}`;
-        }
+        selectedFiles.push(file);
       }
-      statusLine.textContent = "";
       renderFileList();
     }
 
@@ -1051,11 +1036,10 @@
     });
 
     dropzone.addEventListener("click", () => fileInput.click());
-    fileInput.addEventListener("change", async (event) =>
+    fileInput.addEventListener("change", (event) =>
     {
-      const files = Array.from(event.target.files);
+      addFiles(Array.from(event.target.files));
       fileInput.value = "";
-      await addFiles(files);
     });
 
     ["dragenter", "dragover"].forEach((eventName) =>
@@ -1074,9 +1058,9 @@
         dropzone.classList.remove("dragover");
       });
     });
-    dropzone.addEventListener("drop", async (event) =>
+    dropzone.addEventListener("drop", (event) =>
     {
-      await addFiles(Array.from(event.dataTransfer.files));
+      addFiles(Array.from(event.dataTransfer.files));
     });
 
     // verdict ("pass"/"warn"/"fail") + "error" cục bộ (lỗi input/network) ->
@@ -1159,7 +1143,7 @@
 
           const downloadLink = document.createElement("a");
           downloadLink.href = result.imageDataUrl;
-          downloadLink.download = `scan_${result.filename}.png`;
+          downloadLink.download = `scan_${result.downloadName || result.filename}.png`;
           downloadLink.textContent = "Tải";
           linkCell.appendChild(downloadLink);
         }
@@ -1170,6 +1154,9 @@
       resultsTable.hidden = results.length === 0;
     }
 
+    // Trả về MẢNG dòng, không phải một dòng: một PDF nhiều trang tách thành
+    // nhiều dòng kết quả (một dòng/trang, xem normalizeApiResult()), một ảnh
+    // hay PDF một trang thì mảng chỉ có một phần tử.
     async function scanOneFile(file, options)
     {
       const startedAt = performance.now();
@@ -1178,29 +1165,25 @@
         const roundTripTime = (performance.now() - startedAt) / 1000;
 
         if ((response.status === 200 || response.status === 422) && body) {
-          return {
-            filename: file.name,
-            verdict: body.verdict,
-            reasons: body.reasons,
-            imageDataUrl: dataUrlFromBase64Png(body.image),
-            client_round_trip_seconds: roundTripTime
-          };
+          const rows = normalizeApiResult(file.name, body);
+          rows[0].client_round_trip_seconds = roundTripTime;
+          return rows;
         }
 
         const message = body && body.error ? body.error.message : `HTTP ${response.status}`;
-        return {
+        return [{
           filename: file.name,
           verdict: "error",
           message,
           client_round_trip_seconds: roundTripTime
-        };
+        }];
       } catch (error) {
-        return {
+        return [{
           filename: file.name,
           verdict: "error",
           message: error.message,
           client_round_trip_seconds: (performance.now() - startedAt) / 1000
-        };
+        }];
       }
     }
 
@@ -1221,11 +1204,19 @@
       for (let i = 0; i < selectedFiles.length; i++) {
         const file = selectedFiles[i];
         statusLine.textContent = `Đang xử lý file ${i + 1}/${selectedFiles.length}: ${file.name}...`;
-        const result = await scanOneFile(file, options);
-        const originalFileUrl = URL.createObjectURL(file);
-        originalFileUrls.push(originalFileUrl);
-        result.originalFileUrl = originalFileUrl;
-        results.push(result);
+        const rows = await scanOneFile(file, options);
+
+        // Không gán originalFileUrl cho PDF: <img> không tự render được PDF,
+        // nên nút "So sánh" (dùng thẻ <img> cho cả hai vế) sẽ vỡ nếu gán vào
+        // đây - ảnh trang đã crop (result.imageDataUrl) qua "Xem"/"Tải" vẫn
+        // hoạt động bình thường.
+        if (!isPdfFile(file)) {
+          const originalFileUrl = URL.createObjectURL(file);
+          originalFileUrls.push(originalFileUrl);
+          rows.forEach((row) => { row.originalFileUrl = originalFileUrl; });
+        }
+
+        results.push(...rows);
         renderResults(results);
       }
 

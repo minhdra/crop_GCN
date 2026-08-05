@@ -11,7 +11,7 @@ công. Trình duyệt không gọi thẳng API đó mà đi qua một reverse pr
 
 | File | Vai trò |
 |---|---|
-| `index.html` | Giao diện: mở camera chụp ảnh hoặc kéo-thả/tải nhiều ảnh **hoặc PDF**, gửi từng ảnh sang API, hiện verdict (`pass`/`warn`/`fail`) + lý do + ảnh kết quả, có màn so sánh ảnh gốc/kết quả. |
+| `index.html` | Giao diện: mở camera chụp ảnh hoặc kéo-thả/tải nhiều ảnh **hoặc PDF**, gửi từng file sang API, hiện verdict (`pass`/`warn`/`fail`) + lý do + ảnh kết quả (PDF nhiều trang hiện một dòng/trang), có màn so sánh ảnh gốc/kết quả. |
 | `Dockerfile.web` | Build image `nginx:alpine` phục vụ `index.html` tĩnh + cấu hình reverse proxy. |
 | `nginx.web.conf` | Cấu hình nginx: serve `index.html` ở `/`, reverse-proxy `/api/` sang API thật. |
 | `docker-compose.web.yml` | Compose để build + chạy container ở trên, expose cổng `8090`. |
@@ -72,23 +72,38 @@ khác đứng trước lo TLS), đổi `"8090:80"` thành `"127.0.0.1:8090:80"` 
 ## Hợp đồng API mà trang này gọi
 
 Trang gọi một endpoint duy nhất: `POST /?format=json[&audience=capturer|operator][&pre_cropped=1]`,
-multipart field `file`, mỗi request một ảnh. Response `200`/`422` kèm JSON
-`{ verdict, reasons[], image (base64 PNG) }`. Chi tiết đầy đủ nằm trong tài
-liệu của QC Scanner API (không thuộc repo này).
+multipart field `file`, mỗi request một **file** — ảnh hoặc PDF, định dạng do
+API tự dò từ nội dung file (không dựa vào tên file hay `Content-Type`).
+Response `200`/`422` kèm JSON. Chi tiết đầy đủ + toàn bộ danh mục mã lý do
+nằm trong tài liệu của QC Scanner API (không thuộc repo này):
+[`qc_scanner/docs/api.md`](https://github.com/Jester6136/qc_scanner/blob/main/docs/api.md).
 
 ## Upload PDF
 
-API thật không có endpoint nhận PDF (chỉ nhận một ảnh mỗi request, xem mục
-trên) — nên khi người dùng tải lên một file `.pdf`, `index.html` tự tách từng
-trang thành ảnh JPEG **ngay trên trình duyệt** (thư viện
-[`pdf.js`](https://mozilla.github.io/pdf.js/), tải qua CDN `cdnjs`, phiên bản
-`3.11.174`) rồi đưa từng trang vào cùng danh sách file/luồng xử lý như ảnh
-chụp thường (một request/trang sang API). File PDF gốc không được gửi lên
-server — mọi việc đọc PDF diễn ra cục bộ.
+API thật nhận PDF trực tiếp ở cùng endpoint/field `file` như ảnh (tối đa 50
+trang, giới hạn `PDF_TOO_MANY_PAGES`) — `index.html` gửi thẳng file PDF gốc
+sang API, **không** tự xử lý/tách trang ở trình duyệt.
 
-Vì phụ thuộc CDN ngoài, trang cần Internet ra ngoài khi build/host (không chỉ
-mạng nội bộ tới API) để tải được `pdf.min.js`/`pdf.worker.min.js`. Nếu triển
-khai trong mạng cô lập hoàn toàn, cần tự host hai file đó thay vì trỏ CDN.
+Hình dạng response khác nhau tuỳ input, và `index.html` xử lý cả hai
+(`normalizeApiResult()` trong script):
+
+- Ảnh rời, hoặc PDF **một trang**: response phẳng như ảnh thường —
+  `{ verdict, reasons[], image (base64 PNG) }`.
+- PDF **nhiều trang**: luôn ra JSON (kể cả không có `?format=json`) với hình
+  dạng khác — `{ source: "pdf", verdict, page_count, pages: [{ page, verdict,
+  reasons[], metrics, image }, ...] }`. `verdict` gộp là **trang tệ nhất**,
+  không phải trang đầu. Trang này tách kết quả thành **một dòng/trang** trong
+  bảng kết quả, thay vì chỉ hiện verdict gộp — để không giấu mất trang lỗi
+  đứng sau các trang tốt.
+
+Với PDF, mỗi trang scan được API chấm với `pre_cropped` bật sẵn (trang PDF
+coi như tờ giấy đã cắt sát) — không liên quan tới checkbox "Ảnh đã cắt sát từ
+trước" trên trang này, checkbox đó chỉ áp dụng cho ảnh/PDF do người dùng tự
+đánh dấu qua tham số `pre_cropped` gửi kèm request.
+
+Nút "So sánh" (ảnh gốc/kết quả) không hiện với kết quả từ PDF — `<img>` không
+tự render được file PDF làm vế "ảnh gốc", nên trang bỏ qua so sánh cho case
+này; "Xem"/"Tải" ảnh kết quả từng trang vẫn hoạt động bình thường.
 
 ## Lưu ý
 
