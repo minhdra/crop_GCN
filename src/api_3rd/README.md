@@ -11,7 +11,7 @@ công. Trình duyệt không gọi thẳng API đó mà đi qua một reverse pr
 
 | File | Vai trò |
 |---|---|
-| `index.html` | Giao diện: mở camera chụp ảnh hoặc kéo-thả/tải nhiều ảnh, gửi từng ảnh sang API, hiện verdict (`pass`/`warn`/`fail`) + lý do + ảnh kết quả, có màn so sánh ảnh gốc/kết quả. |
+| `index.html` | Giao diện: mở camera chụp ảnh hoặc kéo-thả/tải nhiều ảnh **hoặc PDF**, gửi từng ảnh sang API, hiện verdict (`pass`/`warn`/`fail`) + lý do + ảnh kết quả, có màn so sánh ảnh gốc/kết quả. |
 | `Dockerfile.web` | Build image `nginx:alpine` phục vụ `index.html` tĩnh + cấu hình reverse proxy. |
 | `nginx.web.conf` | Cấu hình nginx: serve `index.html` ở `/`, reverse-proxy `/api/` sang API thật. |
 | `docker-compose.web.yml` | Compose để build + chạy container ở trên, expose cổng `8090`. |
@@ -75,6 +75,20 @@ Trang gọi một endpoint duy nhất: `POST /?format=json[&audience=capturer|op
 multipart field `file`, mỗi request một ảnh. Response `200`/`422` kèm JSON
 `{ verdict, reasons[], image (base64 PNG) }`. Chi tiết đầy đủ nằm trong tài
 liệu của QC Scanner API (không thuộc repo này).
+
+## Upload PDF
+
+API thật không có endpoint nhận PDF (chỉ nhận một ảnh mỗi request, xem mục
+trên) — nên khi người dùng tải lên một file `.pdf`, `index.html` tự tách từng
+trang thành ảnh JPEG **ngay trên trình duyệt** (thư viện
+[`pdf.js`](https://mozilla.github.io/pdf.js/), tải qua CDN `cdnjs`, phiên bản
+`3.11.174`) rồi đưa từng trang vào cùng danh sách file/luồng xử lý như ảnh
+chụp thường (một request/trang sang API). File PDF gốc không được gửi lên
+server — mọi việc đọc PDF diễn ra cục bộ.
+
+Vì phụ thuộc CDN ngoài, trang cần Internet ra ngoài khi build/host (không chỉ
+mạng nội bộ tới API) để tải được `pdf.min.js`/`pdf.worker.min.js`. Nếu triển
+khai trong mạng cô lập hoàn toàn, cần tự host hai file đó thay vì trỏ CDN.
 
 ## Lưu ý
 

@@ -547,10 +547,10 @@
   </section>
 
   <section class="secondary">
-    <h2>Hoặc tải ảnh có sẵn</h2>
+    <h2>Hoặc tải ảnh/PDF có sẵn</h2>
     <div class="dropzone" id="dropzone">
-      <p>Kéo thả ảnh vào đây, hoặc bấm để chọn (chọn được nhiều ảnh cùng lúc)</p>
-      <input type="file" id="file-input" multiple accept=".jpg,.jpeg,.png,.bmp,.tiff,.webp" />
+      <p>Kéo thả ảnh hoặc PDF vào đây, hoặc bấm để chọn (chọn được nhiều file cùng lúc)</p>
+      <input type="file" id="file-input" multiple accept=".jpg,.jpeg,.png,.bmp,.tiff,.webp,.pdf" />
     </div>
 
     <ul id="file-list"></ul>
@@ -627,6 +627,14 @@
   </div>
   <canvas id="camera-canvas" hidden></canvas>
 
+  <!-- Đọc PDF ở phía trình duyệt để tách từng trang thành ảnh trước khi gửi -
+       API QC Scanner bên thứ 3 chỉ nhận một ảnh mỗi request (xem README §Hợp
+       đồng API), không có endpoint nhận PDF. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  </script>
   <script>
     // index.html được host tách rời khỏi API thật (192.168.120.9:5000, HTTP
     // thuần, không CORS). Gọi thẳng IP đó từ một trang HTTPS bị trình duyệt
@@ -724,11 +732,53 @@
       clearFilesBtn.hidden = selectedFiles.length === 0;
     }
 
-    function addFiles(fileArray)
+    // API QC Scanner chỉ nhận một ảnh mỗi request (xem README §Hợp đồng API),
+    // không có endpoint nhận PDF - nên PDF được tách thành ảnh từng trang
+    // ngay ở trình duyệt (pdf.js) trước khi đưa vào cùng luồng xử lý như ảnh
+    // thường. Scale 2.0 để đủ độ phân giải qua ngưỡng LOW_RESOLUTION của QC.
+    const PDF_RENDER_SCALE = 2.0;
+
+    function isPdfFile(file)
     {
-      for (const file of fileArray) {
-        selectedFiles.push(file);
+      return file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+    }
+
+    async function pdfFileToImageFiles(pdfFile)
+    {
+      const buffer = await pdfFile.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+      const baseName = pdfFile.name.replace(/\.pdf$/i, "");
+      const imageFiles = [];
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const viewport = page.getViewport({ scale: PDF_RENDER_SCALE });
+        const canvas = document.createElement("canvas");
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+        const suffix = pdf.numPages > 1 ? `_trang${pageNum}` : "";
+        imageFiles.push(new File([blob], `${baseName}${suffix}.jpg`, { type: "image/jpeg" }));
       }
+      return imageFiles;
+    }
+
+    async function addFiles(fileArray)
+    {
+      submitBtn.disabled = true;
+      for (const file of fileArray) {
+        if (!isPdfFile(file)) {
+          selectedFiles.push(file);
+          continue;
+        }
+        statusLine.textContent = `Đang đọc PDF ${file.name}...`;
+        try {
+          selectedFiles.push(...(await pdfFileToImageFiles(file)));
+        } catch (error) {
+          statusLine.textContent = `Không đọc được PDF ${file.name}: ${error.message}`;
+        }
+      }
+      statusLine.textContent = "";
       renderFileList();
     }
 
@@ -1001,10 +1051,11 @@
     });
 
     dropzone.addEventListener("click", () => fileInput.click());
-    fileInput.addEventListener("change", (event) =>
+    fileInput.addEventListener("change", async (event) =>
     {
-      addFiles(Array.from(event.target.files));
+      const files = Array.from(event.target.files);
       fileInput.value = "";
+      await addFiles(files);
     });
 
     ["dragenter", "dragover"].forEach((eventName) =>
@@ -1023,9 +1074,9 @@
         dropzone.classList.remove("dragover");
       });
     });
-    dropzone.addEventListener("drop", (event) =>
+    dropzone.addEventListener("drop", async (event) =>
     {
-      addFiles(Array.from(event.dataTransfer.files));
+      await addFiles(Array.from(event.dataTransfer.files));
     });
 
     // verdict ("pass"/"warn"/"fail") + "error" cục bộ (lỗi input/network) ->
