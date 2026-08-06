@@ -1,0 +1,4 @@
+// Sinh ra config.js thật lúc container khởi động (docker-entrypoint.d/40-inject-api-key.sh
+// chạy envsubst trên file này) - KHÔNG sửa tay file config.js trong image, sửa
+// QC_SCANNER_API_KEY ở biến môi trường/.env rồi build lại.
+window.QC_SCANNER_API_KEY = "${QC_SCANNER_API_KEY}";

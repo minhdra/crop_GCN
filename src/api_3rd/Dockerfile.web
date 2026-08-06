@@ -9,6 +9,16 @@
 FROM nginx:alpine
 
 COPY index.html /usr/share/nginx/html/index.html
+COPY config.js.template /usr/share/nginx/html/config.js.template
 COPY nginx.web.conf /etc/nginx/conf.d/default.conf
+
+# Sinh /usr/share/nginx/html/config.js (chứa API key thật) từ
+# config.js.template lúc container khởi động, KHÔNG lúc build image - key
+# đọc từ biến môi trường QC_SCANNER_API_KEY của container (xem
+# docker-compose.web.yml), nên không bao giờ nằm trong layer image hay
+# trong git. Ảnh nginx:alpine tự chạy mọi script thực thi trong
+# /docker-entrypoint.d/ trước khi khởi động nginx - không cần đổi ENTRYPOINT.
+COPY docker-entrypoint.d/40-inject-api-key.sh /docker-entrypoint.d/40-inject-api-key.sh
+RUN chmod +x /docker-entrypoint.d/40-inject-api-key.sh
 
 EXPOSE 80

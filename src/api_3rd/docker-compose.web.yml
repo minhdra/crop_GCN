@@ -24,6 +24,14 @@ services:
     image: qc-scanner-web:local
     container_name: qc-scanner-web
 
+    # QC_SCANNER_API_KEY đọc từ .env cạnh file này (docker compose tự nạp,
+    # xem .env.example) - KHÔNG đặt giá trị key thẳng ở đây, tránh commit
+    # nhầm key vào git. ":?..." bắt buộc phải có giá trị, container dừng
+    # ngay với thông báo rõ ràng thay vì chạy "thành công" với key rỗng rồi
+    # mọi request từ trình duyệt âm thầm bị 401.
+    environment:
+      QC_SCANNER_API_KEY: ${QC_SCANNER_API_KEY:?Thiếu QC_SCANNER_API_KEY - sao chép .env.example thành .env rồi điền key (xem README.md)}
+
     ports:
       # Đổi "8090:80" thành "127.0.0.1:8090:80" nếu chỉ cần mở trên chính máy này
       # (vd khi có reverse proxy/ingress bên ngoài đứng trước container, tự lo TLS

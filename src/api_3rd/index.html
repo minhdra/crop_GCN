@@ -5,6 +5,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>QC Scanner</title>
+  <!-- Sinh lúc container khởi động từ config.js.template (envsubst biến môi
+       trường QC_SCANNER_API_KEY, xem docker-entrypoint.d/ + README.md) -
+       đặt window.QC_SCANNER_API_KEY trước khi script chính chạy bên dưới. -->
+  <script src="config.js"></script>
   <style>
     :root {
       color-scheme: light dark;
@@ -659,6 +663,26 @@
     // không sửa hằng số này.
     const API_BASE = "/api";
 
+    // Key của client "app-web" (xem qc_scanner/docs/api.md §2 - Xác thực).
+    // Server chặn MỌI request thiếu/sai key bằng 401 (trừ /healthz).
+    // KHÔNG hardcode giá trị key ở đây - key thật nằm trong biến môi trường
+    // QC_SCANNER_API_KEY (xem README.md + docker-entrypoint.d/), được nginx
+    // envsubst vào config.js lúc container khởi động rồi nạp qua thẻ
+    // <script src="config.js"> ở trên, để key không bị commit thẳng vào
+    // git. Trang vẫn không có backend riêng để "giấu" key khỏi trình duyệt
+    // (chỉ nginx phục vụ file tĩnh) - đúng như cảnh báo trong api.md: "gọi
+    // từ trình duyệt nghĩa là API key nằm trong mã chạy ở máy người dùng,
+    // ai mở DevTools cũng đọc được", chấp nhận được vì trang chỉ dùng nội
+    // bộ trong LAN qua proxy nginx; mục tiêu ở đây chỉ là khỏi lộ key qua
+    // lịch sử git, không phải giấu key khỏi trình duyệt.
+    const API_KEY = window.QC_SCANNER_API_KEY || "";
+    if (!API_KEY) {
+      console.error(
+        "Thiếu QC_SCANNER_API_KEY - config.js chưa được sinh đúng cách. " +
+        "Xem README.md (biến môi trường QC_SCANNER_API_KEY)."
+      );
+    }
+
     const optAudience = document.getElementById("opt-audience");
     const optPreCropped = document.getElementById("opt-pre-cropped");
 
@@ -683,7 +707,9 @@
     // dò biên và luôn nắn phẳng nếu tìm được. `?format=json` để lấy đủ
     // verdict/reasons/image (base64) thay vì PNG trần, kể cả khi verdict là
     // "fail" (422). PDF nhiều trang luôn trả JSON (bất kể có ?format=json
-    // hay không) với hình dạng khác - xem normalizeApiResult().
+    // hay không) với hình dạng khác - xem normalizeApiResult(). Mọi request
+    // cần header Authorization: Bearer <key> (api.md §2), thiếu/sai key ->
+    // 401 kèm {"error": {"code": "UNAUTHORIZED", ...}}.
     async function callScanApi(file, { audience, preCropped })
     {
       const params = new URLSearchParams({ format: "json" });
@@ -693,7 +719,11 @@
       const formData = new FormData();
       formData.append("file", file, file.name || "capture.jpg");
 
-      const response = await fetch(`${API_BASE}/?${params.toString()}`, { method: "POST", body: formData });
+      const response = await fetch(`${API_BASE}/?${params.toString()}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${API_KEY}` },
+        body: formData,
+      });
       let body = null;
       try {
         body = await response.json();
@@ -701,6 +731,74 @@
         body = null;
       }
       return { response, body };
+    }
+
+    // --- Gọi API: POST /?format=pdf[&audience=...][&pre_cropped=1] --------
+    //
+    // Trả về MỘT file PDF chứa toàn bộ trang đã nắn (dùng được cho cả ảnh
+    // rời lẫn PDF nhiều trang đầu vào - api.md §3 "?format=pdf"), thay vì
+    // JSON/PNG từng trang - dùng cho nút "Xem PDF"/"Tải PDF" ở bảng kết quả.
+    // Theo đúng quy tắc của PNG: verdict "fail" thì trả JSON lý do, không
+    // trả file - !response.ok bắt được cả 422 lẫn 401/400/413.
+    async function fetchPdfResult(file, { audience, preCropped })
+    {
+      const params = new URLSearchParams({ format: "pdf" });
+      if (audience) params.set("audience", audience);
+      if (preCropped) params.set("pre_cropped", "1");
+
+      const formData = new FormData();
+      formData.append("file", file, file.name || "file");
+
+      const response = await fetch(`${API_BASE}/?${params.toString()}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${API_KEY}` },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        let message = response.status === 401
+          ? "Sai API key (401) - lỗi cấu hình, không phải lỗi ảnh."
+          : `HTTP ${response.status}`;
+        try {
+          const body = await response.json();
+          if (body && body.error && body.error.message) message = body.error.message;
+        } catch {
+          // thân lỗi không phải JSON hợp lệ - giữ message mặc định ở trên
+        }
+        throw new Error(message);
+      }
+
+      return response.blob();
+    }
+
+    // Mở PDF kết quả ở tab mới ("view") hoặc tải thẳng về máy ("download").
+    // Gọi lại API mỗi lần bấm (không cache) vì trang không giữ blob PDF
+    // song song với các dòng ảnh JSON đã render - tránh gọi thêm một lượt
+    // request/file trong lúc xử lý hàng loạt khi có thể chẳng ai bấm xem.
+    async function handleViewOrDownloadPdf(file, options, button, mode)
+    {
+      const originalLabel = button.textContent;
+      button.disabled = true;
+      button.textContent = "Đang tải PDF...";
+      try {
+        const blob = await fetchPdfResult(file, options);
+        const url = URL.createObjectURL(blob);
+        if (mode === "download") {
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = `${file.name.replace(/\.[^.]+$/, "")}_scan.pdf`;
+          link.click();
+        } else {
+          window.open(url, "_blank");
+        }
+        // Trì hoãn revoke để tab mới/download kịp nạp xong blob trước khi URL mất hiệu lực.
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      } catch (error) {
+        alert(`Không lấy được PDF: ${error.message}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = originalLabel;
+      }
     }
 
     function currentOptions()
@@ -1043,6 +1141,10 @@
           renderCameraIssues("Ảnh chưa đạt yêu cầu, vui lòng chụp lại:", body.reasons || []);
         } else if (response.status === 400 && body) {
           renderCameraIssues("Không xử lý được ảnh, vui lòng thử lại:", [body.error]);
+        } else if (response.status === 401) {
+          renderCameraIssues("Sai API key - lỗi cấu hình, không phải lỗi ảnh:", [
+            { message: (body && body.error && body.error.message) || "Kiểm tra lại API key trong index.html." }
+          ]);
         } else {
           renderCameraIssues("Không xử lý được ảnh, vui lòng thử lại:", [{ message: `HTTP ${response.status}` }]);
         }
@@ -1199,6 +1301,27 @@
           downloadLink.textContent = "Tải";
           linkCell.appendChild(downloadLink);
         }
+        // Chỉ gắn ở dòng đầu tiên của mỗi file (result.sourceFile chỉ được
+        // đặt cho rows[0] trong submitBtn handler) - PDF nhiều trang tách
+        // thành nhiều dòng/trang nhưng chỉ có MỘT file PDF kết quả gộp cho
+        // cả file, không phải một PDF riêng mỗi trang.
+        if (result.sourceFile) {
+          const viewPdfBtn = document.createElement("button");
+          viewPdfBtn.type = "button";
+          viewPdfBtn.className = "link-button";
+          viewPdfBtn.textContent = "Xem PDF";
+          viewPdfBtn.addEventListener("click", () =>
+            handleViewOrDownloadPdf(result.sourceFile, result.sourceOptions, viewPdfBtn, "view"));
+          linkCell.appendChild(viewPdfBtn);
+
+          const downloadPdfBtn = document.createElement("button");
+          downloadPdfBtn.type = "button";
+          downloadPdfBtn.className = "link-button";
+          downloadPdfBtn.textContent = "Tải PDF";
+          downloadPdfBtn.addEventListener("click", () =>
+            handleViewOrDownloadPdf(result.sourceFile, result.sourceOptions, downloadPdfBtn, "download"));
+          linkCell.appendChild(downloadPdfBtn);
+        }
         row.appendChild(linkCell);
 
         resultsBody.appendChild(row);
@@ -1222,7 +1345,11 @@
           return rows;
         }
 
-        const message = body && body.error ? body.error.message : `HTTP ${response.status}`;
+        const message = body && body.error
+          ? body.error.message
+          : (response.status === 401
+            ? "Sai API key (401) - lỗi cấu hình, không phải lỗi ảnh."
+            : `HTTP ${response.status}`);
         return [{
           filename: file.name,
           verdict: "error",
@@ -1266,6 +1393,16 @@
           const originalFileUrl = URL.createObjectURL(file);
           originalFileUrls.push(originalFileUrl);
           rows.forEach((row) => { row.originalFileUrl = originalFileUrl; });
+        }
+
+        // Chỉ gắn ở dòng đầu (rows[0]): nút "Xem PDF"/"Tải PDF" gọi lại API
+        // với ?format=pdf để lấy MỘT file PDF gộp toàn bộ trang - không cần
+        // lặp lại ở mỗi dòng/trang của cùng một file PDF nhiều trang. Bỏ
+        // qua verdict "error" cục bộ (lỗi mạng/HTTP trước khi máy kịp chấm
+        // ảnh) - gọi lại ?format=pdf chỉ lặp lại đúng lỗi đó, không ích gì.
+        if (rows.length > 0 && rows[0].verdict !== "error") {
+          rows[0].sourceFile = file;
+          rows[0].sourceOptions = options;
         }
 
         results.push(...rows);
