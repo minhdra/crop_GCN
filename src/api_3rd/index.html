@@ -339,6 +339,13 @@
       object-fit: contain;
     }
 
+    .compare-pane iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: #fff;
+    }
+
     #status-line {
       margin-top: 0.75rem;
       font-size: 0.9rem;
@@ -609,6 +616,7 @@
       <div class="modal-body">
         <div class="compare-pane">
           <img id="compare-original-img" alt="Ảnh gốc" />
+          <iframe id="compare-original-pdf" title="Trang gốc PDF" hidden></iframe>
         </div>
         <div class="compare-pane">
           <img id="compare-result-img" alt="Ảnh kết quả" />
@@ -696,6 +704,7 @@
     const resultsBody = resultsTable.querySelector("tbody");
     const compareModal = document.getElementById("compare-modal");
     const compareOriginalImg = document.getElementById("compare-original-img");
+    const compareOriginalPdf = document.getElementById("compare-original-pdf");
     const compareResultImg = document.getElementById("compare-result-img");
     const compareCloseBtn = document.getElementById("compare-close");
 
@@ -733,74 +742,6 @@
       return { response, body };
     }
 
-    // --- Gọi API: POST /?format=pdf[&audience=...][&pre_cropped=1] --------
-    //
-    // Trả về MỘT file PDF chứa toàn bộ trang đã nắn (dùng được cho cả ảnh
-    // rời lẫn PDF nhiều trang đầu vào - api.md §3 "?format=pdf"), thay vì
-    // JSON/PNG từng trang - dùng cho nút "Xem PDF"/"Tải PDF" ở bảng kết quả.
-    // Theo đúng quy tắc của PNG: verdict "fail" thì trả JSON lý do, không
-    // trả file - !response.ok bắt được cả 422 lẫn 401/400/413.
-    async function fetchPdfResult(file, { audience, preCropped })
-    {
-      const params = new URLSearchParams({ format: "pdf" });
-      if (audience) params.set("audience", audience);
-      if (preCropped) params.set("pre_cropped", "1");
-
-      const formData = new FormData();
-      formData.append("file", file, file.name || "file");
-
-      const response = await fetch(`${API_BASE}/?${params.toString()}`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${API_KEY}` },
-        body: formData,
-      });
-
-      if (!response.ok) {
-        let message = response.status === 401
-          ? "Sai API key (401) - lỗi cấu hình, không phải lỗi ảnh."
-          : `HTTP ${response.status}`;
-        try {
-          const body = await response.json();
-          if (body && body.error && body.error.message) message = body.error.message;
-        } catch {
-          // thân lỗi không phải JSON hợp lệ - giữ message mặc định ở trên
-        }
-        throw new Error(message);
-      }
-
-      return response.blob();
-    }
-
-    // Mở PDF kết quả ở tab mới ("view") hoặc tải thẳng về máy ("download").
-    // Gọi lại API mỗi lần bấm (không cache) vì trang không giữ blob PDF
-    // song song với các dòng ảnh JSON đã render - tránh gọi thêm một lượt
-    // request/file trong lúc xử lý hàng loạt khi có thể chẳng ai bấm xem.
-    async function handleViewOrDownloadPdf(file, options, button, mode)
-    {
-      const originalLabel = button.textContent;
-      button.disabled = true;
-      button.textContent = "Đang tải PDF...";
-      try {
-        const blob = await fetchPdfResult(file, options);
-        const url = URL.createObjectURL(blob);
-        if (mode === "download") {
-          const link = document.createElement("a");
-          link.href = url;
-          link.download = `${file.name.replace(/\.[^.]+$/, "")}_scan.pdf`;
-          link.click();
-        } else {
-          window.open(url, "_blank");
-        }
-        // Trì hoãn revoke để tab mới/download kịp nạp xong blob trước khi URL mất hiệu lực.
-        setTimeout(() => URL.revokeObjectURL(url), 60000);
-      } catch (error) {
-        alert(`Không lấy được PDF: ${error.message}`);
-      } finally {
-        button.disabled = false;
-        button.textContent = originalLabel;
-      }
-    }
-
     function currentOptions()
     {
       return {
@@ -819,12 +760,66 @@
       return file.type === "application/pdf" || /\.pdf$/i.test(file.name);
     }
 
+    function loadImageElement(url)
+    {
+      return new Promise((resolve, reject) =>
+      {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("Không tải được ảnh"));
+        img.src = url;
+      });
+    }
+
+    // Ghép ảnh gốc và ảnh đã cắt nằm cạnh nhau thành một PNG duy nhất - dùng
+    // cho nút "Tải" ở bảng kết quả (thay vì chỉ tải riêng ảnh đã cắt), để
+    // người xem so sánh được ngay trong file tải về. Giữ nguyên kích thước
+    // từng ảnh, canh theo chiều cao lớn hơn trong hai ảnh.
+    async function buildComparisonPng(originalUrl, resultUrl)
+    {
+      const [originalImg, resultImg] = await Promise.all([
+        loadImageElement(originalUrl),
+        loadImageElement(resultUrl)
+      ]);
+      const gap = 12;
+      const canvas = document.createElement("canvas");
+      canvas.width = originalImg.naturalWidth + gap + resultImg.naturalWidth;
+      canvas.height = Math.max(originalImg.naturalHeight, resultImg.naturalHeight);
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(originalImg, 0, 0);
+      ctx.drawImage(resultImg, originalImg.naturalWidth + gap, 0);
+      return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    }
+
+    async function handleDownloadComparison(originalUrl, resultUrl, downloadName, button)
+    {
+      const originalLabel = button.textContent;
+      button.disabled = true;
+      button.textContent = "Đang ghép ảnh...";
+      try {
+        const blob = await buildComparisonPng(originalUrl, resultUrl);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `scan_${downloadName}_sosanh.png`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      } catch (error) {
+        alert(`Không tạo được ảnh so sánh: ${error.message}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = originalLabel;
+      }
+    }
+
     // PDF một trang (và ảnh rời) trả đúng hợp đồng phẳng {verdict, reasons,
     // image}. PDF nhiều trang trả {source, verdict, page_count, pages[]} -
     // `verdict` ở đây là trang TỆ NHẤT, không phải trang đầu (xem
     // qc_scanner/docs/api.md §2). Tách thành nhiều dòng, một dòng/trang, để
     // không giấu mất trang lỗi phía sau verdict gộp.
-    function normalizeApiResult(filename, body)
+    function normalizeApiResult(filename, body, isPdf)
     {
       if (Array.isArray(body.pages)) {
         // downloadName riêng, không chứa "/" - filename hiển thị có "/" (vd
@@ -834,7 +829,9 @@
           downloadName: body.page_count > 1 ? `${filename}_trang${page.page}` : filename,
           verdict: page.verdict,
           reasons: page.reasons,
-          imageDataUrl: dataUrlFromBase64Png(page.image)
+          imageDataUrl: dataUrlFromBase64Png(page.image),
+          isPdf,
+          pageNumber: page.page
         }));
       }
       return [{
@@ -842,7 +839,8 @@
         downloadName: filename,
         verdict: body.verdict,
         reasons: body.reasons,
-        imageDataUrl: dataUrlFromBase64Png(body.image)
+        imageDataUrl: dataUrlFromBase64Png(body.image),
+        isPdf
       }];
     }
 
@@ -1165,9 +1163,22 @@
       cameraModal.hidden = true;
     });
 
-    function openCompareModal(originalUrl, resultUrl)
+    // Vế "gốc" dùng <iframe> cho PDF (trình duyệt tự render PDF, kèm
+    // #page=N để mở đúng trang) vì <img> không hiển thị được PDF; ảnh rời
+    // vẫn dùng <img> như cũ.
+    function openCompareModal(originalUrl, resultUrl, isPdf, pageNumber)
     {
-      compareOriginalImg.src = originalUrl;
+      if (isPdf) {
+        compareOriginalImg.hidden = true;
+        compareOriginalImg.src = "";
+        compareOriginalPdf.hidden = false;
+        compareOriginalPdf.src = pageNumber ? `${originalUrl}#page=${pageNumber}` : originalUrl;
+      } else {
+        compareOriginalPdf.hidden = true;
+        compareOriginalPdf.src = "";
+        compareOriginalImg.hidden = false;
+        compareOriginalImg.src = originalUrl;
+      }
       compareResultImg.src = resultUrl;
       compareModal.hidden = false;
     }
@@ -1175,7 +1186,10 @@
     function closeCompareModal()
     {
       compareModal.hidden = true;
+      compareOriginalImg.hidden = false;
       compareOriginalImg.src = "";
+      compareOriginalPdf.hidden = true;
+      compareOriginalPdf.src = "";
       compareResultImg.src = "";
     }
 
@@ -1285,42 +1299,21 @@
           compareBtn.type = "button";
           compareBtn.className = "link-button";
           compareBtn.textContent = "So sánh";
-          compareBtn.addEventListener("click", () => openCompareModal(result.originalFileUrl, result.imageDataUrl));
+          compareBtn.addEventListener("click", () =>
+            openCompareModal(result.originalFileUrl, result.imageDataUrl, result.isPdf, result.pageNumber));
           linkCell.appendChild(compareBtn);
         }
-        if (result.imageDataUrl) {
-          const viewLink = document.createElement("a");
-          viewLink.href = result.imageDataUrl;
-          viewLink.target = "_blank";
-          viewLink.textContent = "Xem";
-          linkCell.appendChild(viewLink);
-
-          const downloadLink = document.createElement("a");
-          downloadLink.href = result.imageDataUrl;
-          downloadLink.download = `scan_${result.downloadName || result.filename}.png`;
-          downloadLink.textContent = "Tải";
-          linkCell.appendChild(downloadLink);
-        }
-        // Chỉ gắn ở dòng đầu tiên của mỗi file (result.sourceFile chỉ được
-        // đặt cho rows[0] trong submitBtn handler) - PDF nhiều trang tách
-        // thành nhiều dòng/trang nhưng chỉ có MỘT file PDF kết quả gộp cho
-        // cả file, không phải một PDF riêng mỗi trang.
-        if (result.sourceFile) {
-          const viewPdfBtn = document.createElement("button");
-          viewPdfBtn.type = "button";
-          viewPdfBtn.className = "link-button";
-          viewPdfBtn.textContent = "Xem PDF";
-          viewPdfBtn.addEventListener("click", () =>
-            handleViewOrDownloadPdf(result.sourceFile, result.sourceOptions, viewPdfBtn, "view"));
-          linkCell.appendChild(viewPdfBtn);
-
-          const downloadPdfBtn = document.createElement("button");
-          downloadPdfBtn.type = "button";
-          downloadPdfBtn.className = "link-button";
-          downloadPdfBtn.textContent = "Tải PDF";
-          downloadPdfBtn.addEventListener("click", () =>
-            handleViewOrDownloadPdf(result.sourceFile, result.sourceOptions, downloadPdfBtn, "download"));
-          linkCell.appendChild(downloadPdfBtn);
+        // Không có "Tải" cho PDF: ảnh gốc từng trang chỉ xem được qua
+        // <iframe> (trình duyệt tự render), không lấy được dạng raster để
+        // ghép cùng ảnh đã cắt thành một PNG so sánh.
+        if (result.originalFileUrl && result.imageDataUrl && !result.isPdf) {
+          const downloadBtn = document.createElement("button");
+          downloadBtn.type = "button";
+          downloadBtn.className = "link-button";
+          downloadBtn.textContent = "Tải";
+          downloadBtn.addEventListener("click", () =>
+            handleDownloadComparison(result.originalFileUrl, result.imageDataUrl, result.downloadName || result.filename, downloadBtn));
+          linkCell.appendChild(downloadBtn);
         }
         row.appendChild(linkCell);
 
@@ -1340,7 +1333,7 @@
         const roundTripTime = (performance.now() - startedAt) / 1000;
 
         if ((response.status === 200 || response.status === 422) && body) {
-          const rows = normalizeApiResult(file.name, body);
+          const rows = normalizeApiResult(file.name, body, isPdfFile(file));
           rows[0].client_round_trip_seconds = roundTripTime;
           return rows;
         }
@@ -1385,25 +1378,13 @@
         statusLine.textContent = `Đang xử lý file ${i + 1}/${selectedFiles.length}: ${file.name}...`;
         const rows = await scanOneFile(file, options);
 
-        // Không gán originalFileUrl cho PDF: <img> không tự render được PDF,
-        // nên nút "So sánh" (dùng thẻ <img> cho cả hai vế) sẽ vỡ nếu gán vào
-        // đây - ảnh trang đã crop (result.imageDataUrl) qua "Xem"/"Tải" vẫn
-        // hoạt động bình thường.
-        if (!isPdfFile(file)) {
-          const originalFileUrl = URL.createObjectURL(file);
-          originalFileUrls.push(originalFileUrl);
-          rows.forEach((row) => { row.originalFileUrl = originalFileUrl; });
-        }
-
-        // Chỉ gắn ở dòng đầu (rows[0]): nút "Xem PDF"/"Tải PDF" gọi lại API
-        // với ?format=pdf để lấy MỘT file PDF gộp toàn bộ trang - không cần
-        // lặp lại ở mỗi dòng/trang của cùng một file PDF nhiều trang. Bỏ
-        // qua verdict "error" cục bộ (lỗi mạng/HTTP trước khi máy kịp chấm
-        // ảnh) - gọi lại ?format=pdf chỉ lặp lại đúng lỗi đó, không ích gì.
-        if (rows.length > 0 && rows[0].verdict !== "error") {
-          rows[0].sourceFile = file;
-          rows[0].sourceOptions = options;
-        }
+        // originalFileUrl trỏ thẳng vào file gốc (ảnh hoặc PDF) - dùng cho
+        // nút "So sánh". Với PDF, openCompareModal() nhúng file gốc bằng
+        // <iframe> (kèm #page=N) thay vì <img> vì trình duyệt không tự
+        // render PDF vào thẻ <img>.
+        const originalFileUrl = URL.createObjectURL(file);
+        originalFileUrls.push(originalFileUrl);
+        rows.forEach((row) => { row.originalFileUrl = originalFileUrl; });
 
         results.push(...rows);
         renderResults(results);
